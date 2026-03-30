@@ -43,7 +43,9 @@ import {
 } from "@paperclipai/adapter-codex-local";
 import { DEFAULT_CURSOR_LOCAL_MODEL } from "@paperclipai/adapter-cursor-local";
 import { DEFAULT_GEMINI_LOCAL_MODEL } from "@paperclipai/adapter-gemini-local";
+import { DEFAULT_OLLAMA_MODEL } from "@paperclipai/adapter-ollama-local";
 import { DEFAULT_OPENCODE_LOCAL_MODEL, isValidOpenCodeModelId } from "@paperclipai/adapter-opencode-local";
+import { OllamaModelPicker } from "../adapters/ollama-local/model-picker";
 import { resolveRouteOnboardingOptions } from "../lib/onboarding-route";
 import { AsciiArtAnimation } from "./AsciiArtAnimation";
 import {
@@ -190,9 +192,12 @@ export function OnboardingWizard() {
     if (step === 3) autoResizeTextarea();
   }, [step, taskDescription, autoResizeTextarea]);
 
-  const { data: adapterModels } = useQuery({
-    // The wizard doesn't expose an environment selector, so models always
-    // resolve against the local Paperclip host (environmentId = null).
+  const {
+    data: adapterModels,
+    isLoading: adapterModelsLoading,
+    isFetching: adapterModelsFetching,
+    refetch: refetchAdapterModels,
+  } = useQuery({
     queryKey: createdCompanyId
       ? queryKeys.agents.adapterModels(createdCompanyId, adapterType, null)
       : ["agents", "none", "adapter-models", adapterType, null],
@@ -763,6 +768,10 @@ export function OnboardingWizard() {
                               setModel(DEFAULT_OPENCODE_LOCAL_MODEL);
                               return;
                             }
+                            if (nextType === "ollama_local" && !model) {
+                              setModel(DEFAULT_OLLAMA_MODEL);
+                              return;
+                            }
                             setModel("");
                           }}
                         >
@@ -819,6 +828,10 @@ export function OnboardingWizard() {
                                 setModel(DEFAULT_CURSOR_LOCAL_MODEL);
                                 return;
                               }
+                              if (nextType === "ollama_local" && !model) {
+                                setModel(DEFAULT_OLLAMA_MODEL);
+                                return;
+                              }
                               if (nextType === "opencode_local") {
                                 setModel(DEFAULT_OPENCODE_LOCAL_MODEL);
                                 return;
@@ -839,8 +852,19 @@ export function OnboardingWizard() {
                     )}
                   </div>
 
-                  {/* Conditional adapter fields */}
-                  {isLocalAdapter && (
+                  {adapterType === "ollama_local" && (
+                    <div className="space-y-2">
+                      <OllamaModelPicker
+                        installedModels={adapterModels ?? []}
+                        value={model}
+                        onChange={(v) => setModel(v)}
+                        loading={adapterModelsLoading || adapterModelsFetching}
+                        onRefresh={() => void refetchAdapterModels()}
+                      />
+                    </div>
+                  )}
+
+                  {isLocalAdapter && adapterType !== "ollama_local" && (
                     <div className="space-y-3">
                       <div>
                         <label className="text-xs text-muted-foreground mb-1 block">
