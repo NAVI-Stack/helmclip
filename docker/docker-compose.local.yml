@@ -1,0 +1,40 @@
+services:
+  paperclip:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+      args:
+        - USER_UID=${USER_UID:-1000}
+        - USER_GID=${USER_GID:-1000}
+    ports:
+      - "${PAPERCLIP_PORT:-3100}:3100"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "3100"
+      SERVE_UI: "true"
+      PAPERCLIP_HOME: "/paperclip"
+      PAPERCLIP_DEPLOYMENT_MODE: "authenticated"
+      PAPERCLIP_DEPLOYMENT_EXPOSURE: "private"
+      PAPERCLIP_PUBLIC_URL: "${PAPERCLIP_PUBLIC_URL:-http://localhost:3100}"
+      BETTER_AUTH_SECRET: "${BETTER_AUTH_SECRET:-paperclip-local-dev-secret}"
+      USER_UID: "${USER_UID:-1000}"
+      USER_GID: "${USER_GID:-1000}"
+
+      # LLM API Keys
+      OPENAI_API_KEY: "${OPENAI_API_KEY:-}"
+      ANTHROPIC_API_KEY: "${ANTHROPIC_API_KEY:-}"
+      GEMINI_API_KEY: "${GEMINI_API_KEY:-}"
+      GOOGLE_API_KEY: "${GOOGLE_API_KEY:-}"
+
+      # Ollama & Custom LLM Endpoints
+      OLLAMA_HOST: "${OLLAMA_HOST:-http://host.docker.internal:11434}"
+      OLLAMA_API_BASE: "${OLLAMA_API_BASE:-http://host.docker.internal:11434}"
+      OPENAI_BASE_URL: "${OPENAI_BASE_URL:-}"
+      OPENAI_API_BASE: "${OPENAI_API_BASE:-}"
+    volumes:
+      - "${PAPERCLIP_DATA_DIR:-../data/docker-paperclip}:/paperclip"
+      # Bind mounts for local workspaces that Paperclip agents can edit
+      - "${WORKSPACE_1_PATH:-C:/Users/evirg/codespace/NAVI-Ecosystem/projects/navi}:/workspaces/workspace_1"
+      - "${WORKSPACE_2_PATH:-C:/Users/evirg/codespace/conversate}:/workspaces/workspace_2"

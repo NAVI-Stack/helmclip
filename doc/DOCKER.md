@@ -121,6 +121,7 @@ Granular overrides remain available if needed (`PAPERCLIP_AUTH_PUBLIC_BASE_URL`,
 
 Set `PAPERCLIP_ALLOWED_HOSTNAMES` explicitly only when you need additional hostnames beyond the public URL host (for example Tailscale/LAN aliases or multiple private hostnames).
 
+
 ## Claude + Codex Local Adapters in Docker
 
 The image pre-installs:
@@ -145,6 +146,51 @@ Notes:
 
 - Without API keys, the app still runs normally.
 - Adapter environment checks in Paperclip will surface missing auth/CLI prerequisites.
+
+## Local Workspaces & Multi-LLM Setup (Docker Compose)
+
+For a fully featured local development workflow where you want to:
+- Grant Paperclip agents access to specific local directories/repositories on your host machine.
+- Provide API keys for **Claude**, **Codex**, and **Gemini**.
+- Connect to **Ollama** running locally on your host.
+
+You can use the dedicated `docker/docker-compose.local.yml` configuration:
+
+1. **Copy the environment template**:
+   ```sh
+   cp docker/.env.local.example .env
+   ```
+2. **Configure your API keys & Workspace paths** in `.env`:
+   - Fill in your `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, and `GEMINI_API_KEY`.
+   - Specify the absolute host paths for directories/repos you want Paperclip to access in `WORKSPACE_1_PATH`, `WORKSPACE_2_PATH`, etc.
+3. **Start the containers**:
+   ```sh
+   docker compose -f docker/docker-compose.local.yml up --build
+   ```
+
+### Accessing Mounted Workspaces in Paperclip
+
+Inside the Paperclip Web Board:
+1. When creating a new Project Workspace, set the **Source Type** to `local_path`.
+2. Set the **CWD** to `/workspaces/workspace_1` (or whichever workspace index you configured in `.env`).
+
+### Configuring LLM Access
+
+- **Claude**: Enabled automatically when `ANTHROPIC_API_KEY` is provided. Uses the `claude_local` adapter.
+- **Codex**: Enabled automatically when `OPENAI_API_KEY` is provided. Uses the `codex_local` adapter.
+- **Gemini**: Enabled automatically when `GEMINI_API_KEY` (or `GOOGLE_API_KEY`) is provided. Uses the `gemini_local` adapter. The Gemini CLI is pre-installed globally in the Docker image.
+- **Ollama**:
+  Ollama typically runs on your host machine. The container resolves the host machine via `host.docker.internal`.
+  1. Set up an agent in Paperclip using the `codex_local` or `opencode_local` adapter.
+  2. In the agent configuration settings, specify your target model (e.g. `qwen2.5-coder` or `llama3`) and inject the custom OpenAI-compatible API base URL via the `env` block:
+     ```json
+     {
+       "model": "qwen2.5-coder",
+       "env": {
+         "OPENAI_BASE_URL": "http://host.docker.internal:11434/v1"
+       }
+     }
+     ```
 
 ## Podman Quadlet (systemd)
 
