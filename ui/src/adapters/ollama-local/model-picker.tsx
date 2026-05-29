@@ -1,7 +1,22 @@
 import { useState, useCallback, useEffect, useRef } from "react";
-import { Check, Download, Loader2, RefreshCw, Zap, AlertCircle, X, XCircle } from "lucide-react";
+import {
+  Check,
+  ChevronRight,
+  Download,
+  Loader2,
+  RefreshCw,
+  Zap,
+  AlertCircle,
+  X,
+  XCircle,
+} from "lucide-react";
 import { cn } from "../../lib/utils";
 import { DEFAULT_OLLAMA_BASE_URL } from "@paperclipai/adapter-ollama-local";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+} from "../../components/ui/collapsible";
 
 // ---------------------------------------------------------------------------
 // Module-level persistent download state — survives component unmount/remount
@@ -349,23 +364,23 @@ export function OllamaModelPicker({
     extraInstalled.length;
 
   return (
-    <div className="space-y-3">
-      {/* Header row */}
-      <div className="flex items-center justify-between">
-        <div className="flex items-center gap-1.5">
-          <Zap className="h-3 w-3 text-yellow-500" />
-          <span className="text-xs font-medium">Agentic models</span>
+    <Collapsible defaultOpen={false} className="space-y-3">
+      <div className="flex items-center justify-between gap-2">
+        <CollapsibleTrigger className="flex min-w-0 flex-1 items-center gap-1.5 text-left text-xs font-medium transition-colors hover:text-foreground [&[data-state=open]>svg.chevron]:rotate-90">
+          <ChevronRight className="chevron h-3 w-3 shrink-0 text-muted-foreground transition-transform" />
+          <Zap className="h-3 w-3 shrink-0 text-yellow-500" />
+          <span>Agentic models</span>
           {installedCount > 0 && (
-            <span className="text-[10px] text-green-600 dark:text-green-400">
+            <span className="text-[10px] font-normal text-green-600 dark:text-green-400">
               ({installedCount} installed)
             </span>
           )}
-        </div>
+        </CollapsibleTrigger>
         {onRefresh && (
           <button
             type="button"
             onClick={onRefresh}
-            className="inline-flex items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
+            className="inline-flex shrink-0 items-center gap-1 text-[10px] text-muted-foreground hover:text-foreground transition-colors"
             title="Refresh installed models"
           >
             <RefreshCw className={cn("h-3 w-3", loading && "animate-spin")} />
@@ -374,6 +389,7 @@ export function OllamaModelPicker({
         )}
       </div>
 
+      <CollapsibleContent className="space-y-3">
       {/* Loading state */}
       {loading && installedModels.length === 0 && (
         <div className="flex items-center gap-2 py-2 text-xs text-muted-foreground">
@@ -626,6 +642,7 @@ export function OllamaModelPicker({
           onChange={(e) => onChange(e.target.value)}
         />
       </div>
-    </div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
