@@ -7,6 +7,7 @@ import { resolvePaperclipInstanceRootForAdapter } from "@paperclipai/adapter-uti
 const TRUTHY_ENV_RE = /^(1|true|yes|on)$/i;
 const COPIED_SHARED_FILES = ["config.json", "config.toml", "instructions.md"] as const;
 const SYMLINKED_SHARED_FILES = ["auth.json"] as const;
+const SYMLINK_DENIED_CODES = new Set(["EPERM", "EACCES", "ENOTSUP"]);
 
 function nonEmpty(value: string | undefined): string | null {
   return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
@@ -83,6 +84,18 @@ async function ensureSymlink(target: string, source: string): Promise<void> {
   await createExpectedSymlink(target, source);
 }
 
+async function ensureSymlinkOrCopy(target: string, source: string): Promise<"symlink" | "copy"> {
+  try {
+    await ensureSymlink(target, source);
+    return "symlink";
+  } catch (error) {
+    const code = (error as NodeJS.ErrnoException).code;
+    if (!code || !SYMLINK_DENIED_CODES.has(code)) throw error;
+    await ensureCopiedFile(target, source);
+    return "copy";
+  }
+}
+
 async function ensureCopiedFile(target: string, source: string): Promise<void> {
   const existing = await fs.lstat(target).catch(() => null);
   if (existing) return;
@@ -133,7 +146,13 @@ export async function prepareManagedCodexHome(
     for (const name of SYMLINKED_SHARED_FILES) {
       const source = path.join(sourceHome, name);
       if (!(await pathExists(source))) continue;
-      await ensureSymlink(path.join(targetHome, name), source);
+      const linkMode = await ensureSymlinkOrCopy(path.join(targetHome, name), source);
+      if (linkMode === "copy") {
+        await onLog(
+          "stdout",
+          `[paperclip] Copied "${name}" into Codex home (symlinks are unavailable on this system; re-run after updating ${sourceHome} credentials).\n`,
+        );
+      }
     }
 
     for (const name of COPIED_SHARED_FILES) {
