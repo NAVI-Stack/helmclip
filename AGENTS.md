@@ -216,3 +216,15 @@ PR #2218 (`feat/external-adapter-phase1`) adds external adapter support. See roo
 - `createServerAdapter()` must include ALL optional fields (especially `detectModel`)
 - Built-in UI adapters can shadow external plugin parsers — remove built-in when fully externalizing
 - Reference external adapters: Hermes (`@henkey/hermes-paperclip-adapter` or `file:`) and Droid (npm)
+
+## Learned User Preferences
+
+- When adapter runs fail, surface the concrete root cause in run `errorMessage` and `errorCode` (e.g. quota exhausted, auth required) instead of generic CLI/API errors when stdout/stderr contain actionable diagnostics.
+
+## Learned Workspace Facts
+
+- Native Windows dev: default embedded Postgres port `54329` may sit in Hyper-V/WSL/Docker excluded TCP ranges; set `embeddedPostgresPort` in `~/.paperclip/instances/default/config.json` to a port outside `netsh interface ipv4 show excludedportrange protocol=tcp` (e.g. `55445`).
+- `gemini_local` pipes large prompts on stdin with an empty `--prompt` flag to avoid Windows ~8k command-line length limits.
+- `gemini_local` maps `TerminalQuotaError` / `QUOTA_EXHAUSTED` from stderr to `errorCode` `gemini_quota_exhausted` with a clear quota message in `errorMessage` and transcript `resultJson`.
+- On Windows without symlink permission, Gemini skill linking logs EPERM warnings (non-fatal); `codex-local` copies `auth.json` when symlink creation is denied (`EPERM` / `EACCES` / `ENOTSUP`).
+- Docker on Windows: repo shell entrypoints must use LF line endings; CRLF on `scripts/docker-entrypoint.sh` causes Linux `exec: no such file or directory`.

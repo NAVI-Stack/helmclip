@@ -253,21 +253,76 @@ export function describeGeminiFailure(parsed: Record<string, unknown>): string |
 
 const GEMINI_AUTH_REQUIRED_RE = /(?:not\s+authenticated|please\s+authenticate|api[_ ]?key\s+(?:required|missing|invalid)|authentication\s+required|unauthorized|invalid\s+credentials|not\s+logged\s+in|login\s+required|run\s+`?gemini\s+auth(?:\s+login)?`?\s+first)/i;
 const GEMINI_QUOTA_EXHAUSTED_RE =
-  /(?:resource_exhausted|quota|rate[-\s]?limit|too many requests|\b429\b|billing details)/i;
+  /(?:resource_exhausted|quota|rate[-\s]?limit|too many requests|\b429\b|billing details|terminalquotaerror|quota_exhausted|exhausted your capacity)/i;
+const GEMINI_TERMINAL_QUOTA_ERROR_RE = /TerminalQuotaError:\s*(.+)/i;
+const GEMINI_QUOTA_CAUSE_MESSAGE_RE = /message:\s*['"]([^'"]+)['"]/i;
+
+function collectGeminiDiagnosticLines(input: {
+  parsed: Record<string, unknown> | null;
+  stdout: string;
+  stderr: string;
+}): string[] {
+  return [...extractGeminiErrorMessages(input.parsed ?? {}), input.stdout, input.stderr]
+    .join("\n")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+}
+
+export function describeGeminiQuotaExhaustion(input: {
+  parsed: Record<string, unknown> | null;
+  stdout: string;
+  stderr: string;
+}): { exhausted: boolean; message: string | null } {
+  const lines = collectGeminiDiagnosticLines(input);
+  const haystack = lines.join("\n");
+  const exhausted = lines.some((line) => GEMINI_QUOTA_EXHAUSTED_RE.test(line));
+  if (!exhausted) {
+    return { exhausted: false, message: null };
+  }
+
+  for (const line of lines) {
+    const terminalQuota = line.match(GEMINI_TERMINAL_QUOTA_ERROR_RE);
+    if (terminalQuota?.[1]) {
+      return { exhausted: true, message: terminalQuota[1].trim() };
+    }
+  }
+
+  for (const line of lines) {
+    const causeMessage = line.match(GEMINI_QUOTA_CAUSE_MESSAGE_RE);
+    if (causeMessage?.[1] && GEMINI_QUOTA_EXHAUSTED_RE.test(causeMessage[1])) {
+      return { exhausted: true, message: causeMessage[1].trim() };
+    }
+  }
+
+  for (const line of lines) {
+    if (/exhausted your capacity/i.test(line)) {
+      const normalized = line.replace(/^.*TerminalQuotaError:\s*/i, "").trim();
+      return { exhausted: true, message: normalized || line };
+    }
+  }
+
+  for (const line of lines) {
+    if (GEMINI_QUOTA_EXHAUSTED_RE.test(line) && !line.startsWith("[paperclip]")) {
+      return { exhausted: true, message: line };
+    }
+  }
+
+  return {
+    exhausted: true,
+    message:
+      "Gemini quota exhausted. Check ai.google.dev usage/billing or retry after the quota window resets.",
+  };
+}
 
 export function detectGeminiAuthRequired(input: {
   parsed: Record<string, unknown> | null;
   stdout: string;
   stderr: string;
 }): { requiresAuth: boolean } {
-  const errors = extractGeminiErrorMessages(input.parsed ?? {});
-  const messages = [...errors, input.stdout, input.stderr]
-    .join("\n")
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  const requiresAuth = messages.some((line) => GEMINI_AUTH_REQUIRED_RE.test(line));
+  const requiresAuth = collectGeminiDiagnosticLines(input).some((line) =>
+    GEMINI_AUTH_REQUIRED_RE.test(line),
+  );
   return { requiresAuth };
 }
 
@@ -276,15 +331,7 @@ export function detectGeminiQuotaExhausted(input: {
   stdout: string;
   stderr: string;
 }): { exhausted: boolean } {
-  const errors = extractGeminiErrorMessages(input.parsed ?? {});
-  const messages = [...errors, input.stdout, input.stderr]
-    .join("\n")
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-
-  const exhausted = messages.some((line) => GEMINI_QUOTA_EXHAUSTED_RE.test(line));
-  return { exhausted };
+  return { exhausted: describeGeminiQuotaExhaustion(input).exhausted };
 }
 
 export function isGeminiTurnLimitResult(

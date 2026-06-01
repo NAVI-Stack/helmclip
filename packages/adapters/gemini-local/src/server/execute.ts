@@ -50,6 +50,7 @@ import {
 import { DEFAULT_GEMINI_LOCAL_MODEL, SANDBOX_INSTALL_COMMAND } from "../index.js";
 import {
   describeGeminiFailure,
+  describeGeminiQuotaExhaustion,
   detectGeminiAuthRequired,
   isGeminiTurnLimitResult,
   isGeminiUnknownSessionError,
@@ -565,19 +566,25 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     clearSessionOnMissingSession = false,
     isRetry = false,
   ): AdapterExecutionResult => {
-    const authMeta = detectGeminiAuthRequired({
+    const diagnosticInput = {
       parsed: attempt.parsed.resultEvent,
       stdout: attempt.proc.stdout,
       stderr: attempt.proc.stderr,
-    });
+    };
+    const authMeta = detectGeminiAuthRequired(diagnosticInput);
+    const quotaMeta = describeGeminiQuotaExhaustion(diagnosticInput);
 
     if (attempt.proc.timedOut) {
       return {
         exitCode: attempt.proc.exitCode,
         signal: attempt.proc.signal,
         timedOut: true,
-        errorMessage: `Timed out after ${timeoutSec}s`,
-        errorCode: authMeta.requiresAuth ? "gemini_auth_required" : null,
+        errorMessage: quotaMeta.message ?? `Timed out after ${timeoutSec}s`,
+        errorCode: authMeta.requiresAuth
+          ? "gemini_auth_required"
+          : quotaMeta.exhausted
+            ? "gemini_quota_exhausted"
+            : null,
         clearSession: clearSessionOnMissingSession,
       };
     }
@@ -588,6 +595,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       ? describeGeminiFailure(attempt.parsed.resultEvent)
       : null;
     const fallbackErrorMessage =
+      quotaMeta.message ||
       parsedError ||
       structuredFailure ||
       stderrLine ||
@@ -622,6 +630,15 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
         stderr: attempt.proc.stderr,
       }),
       ...(failed && clearSessionForTurnLimit ? { stopReason: "max_turns_exhausted" } : {}),
+      ...(failed && quotaMeta.exhausted && quotaMeta.message
+        ? {
+            stopReason: "quota_exhausted",
+            error: {
+              type: "quota_exhausted",
+              message: quotaMeta.message,
+            },
+          }
+        : {}),
     };
 
     return {
@@ -631,9 +648,11 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       errorMessage: failed ? fallbackErrorMessage : null,
       errorCode: failed && authMeta.requiresAuth
         ? "gemini_auth_required"
-        : failed && clearSessionForTurnLimit
-        ? "max_turns_exhausted"
-        : null,
+        : failed && quotaMeta.exhausted
+          ? "gemini_quota_exhausted"
+          : failed && clearSessionForTurnLimit
+            ? "max_turns_exhausted"
+            : null,
       usage: attempt.parsed.usage,
       sessionId: resolvedSessionId,
       sessionParams: resolvedSessionParams,

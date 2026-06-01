@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { parseGeminiJsonl } from "./parse.js";
+import { describeGeminiQuotaExhaustion, parseGeminiJsonl } from "./parse.js";
 
 describe("parseGeminiJsonl", () => {
   it("collects assistant text from message events with string content", () => {
@@ -129,5 +129,37 @@ describe("parseGeminiJsonl", () => {
 
     const result = parseGeminiJsonl(stdout);
     expect(result.errorMessage).toBe("boom");
+  });
+});
+
+describe("describeGeminiQuotaExhaustion", () => {
+  it("detects TerminalQuotaError details from stderr over generic stream-json errors", () => {
+    const stdout = [
+      '{"type":"init","session_id":"session-1","model":"auto"}',
+      '{"type":"result","status":"error","error":{"type":"unknown","message":"[API Error: An unknown error occurred.]"}}',
+    ].join("\n");
+    const stderr = [
+      "[paperclip] Failed to link Gemini skill \"paperclip\": EPERM: operation not permitted",
+      "Error when talking to Gemini API Full report available at: C:\\Temp\\gemini-client-error.json",
+      "TerminalQuotaError: You have exhausted your capacity on this model. Your quota will reset after 11h11m4s.",
+      "  reason: 'QUOTA_EXHAUSTED'",
+    ].join("\n");
+
+    const quota = describeGeminiQuotaExhaustion({ parsed: null, stdout, stderr });
+
+    expect(quota.exhausted).toBe(true);
+    expect(quota.message).toBe(
+      "You have exhausted your capacity on this model. Your quota will reset after 11h11m4s.",
+    );
+  });
+
+  it("returns not exhausted for unrelated failures", () => {
+    const quota = describeGeminiQuotaExhaustion({
+      parsed: { status: "error", error: "boom" },
+      stdout: "",
+      stderr: "generic adapter failure",
+    });
+
+    expect(quota).toEqual({ exhausted: false, message: null });
   });
 });
