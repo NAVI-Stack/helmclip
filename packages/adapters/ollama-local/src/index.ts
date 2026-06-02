@@ -26,14 +26,12 @@ Use when:
 - You want to use any custom or fine-tuned model available in the Ollama registry
 
 Don't use when:
-- You need a coding agent that autonomously writes files and runs tools (use claude_local, codex_local, or gemini_local instead)
-- The task requires tool use / code-execution capabilities (Ollama models lack agent tooling)
-- You need subscription-based or cloud LLMs (use claude_local, codex_local, etc.)
 - Ollama is not installed or the model has not been pulled locally
 
 Core fields:
 - baseUrl (string, optional): Ollama server base URL. Defaults to http://localhost:11434.
 - model (string, optional): Ollama model to use. Defaults to llama3.2. Must be available via \`ollama pull <model>\`.
+- instructionsFilePath (string, optional): absolute path to a markdown instructions file (AGENTS.md) injected at runtime.
 - promptTemplate (string, optional): run prompt template supporting {{agent.*}}, {{context.*}}, etc.
 - system (string, optional): system prompt injected as the first message.
 - temperature (number, optional): sampling temperature (0.0–2.0). Uses model default when omitted.
