@@ -1,5 +1,6 @@
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import type {
   AdapterExecutionContext,
   AdapterExecutionResult,
@@ -17,8 +18,12 @@ import {
   DEFAULT_PAPERCLIP_AGENT_PROMPT_TEMPLATE,
   joinPromptSections,
   renderPaperclipWakePrompt,
+  readPaperclipRuntimeSkillEntries,
+  readPaperclipSkillMarkdown,
 } from "@paperclipai/adapter-utils/server-utils";
 import { DEFAULT_OLLAMA_BASE_URL, DEFAULT_OLLAMA_MODEL } from "../index.js";
+
+const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
 export interface OllamaMessage {
   role: "system" | "user" | "assistant" | "tool";
@@ -146,7 +151,10 @@ async function resolveModelName(
     const baseMatch = names.find(
       (n) => n.split(":")[0].toLowerCase() === requestedBase,
     );
-    if (baseMatch) return baseMatch;
+    if (baseMatch) {
+      // console.log(`[ollama] Resolved ${requested} to ${baseMatch}`);
+      return baseMatch;
+    }
   } catch {
     // network error / timeout — continue with original name
   }
@@ -178,6 +186,9 @@ export async function execute(
 
   // Resolve the model name against what Ollama actually has installed.
   const model = await resolveModelName(baseUrl, rawModel);
+  if (model !== rawModel) {
+    await onLog("stdout", `[paperclip] Resolved model "${rawModel}" to "${model}"\n`);
+  }
 
   const instructionsFilePath = asString(config.instructionsFilePath, "").trim();
   const instructionsDir = instructionsFilePath ? `${path.dirname(instructionsFilePath)}/` : "";
@@ -239,8 +250,26 @@ const priorMessages: OllamaMessage[] = (() => {
   const finalInstructionsPrefix = shouldUseResumeDeltaPrompt ? "" : instructionsPrefix;
   const finalRenderedPrompt = shouldUseResumeDeltaPrompt ? "" : renderedPrompt;
 
+  const desiredSkillNames = Array.isArray(config.paperclipDesiredSkills)
+    ? config.paperclipDesiredSkills.filter((s): s is string => typeof s === "string")
+    : [];
+  
+  const skillPrompts: string[] = [];
+  if (desiredSkillNames.length > 0) {
+    for (const skillName of desiredSkillNames) {
+      const markdown = await readPaperclipSkillMarkdown(__moduleDir, skillName);
+      if (markdown) {
+        skillPrompts.push(`### Skill: ${skillName}\n\n${markdown}`);
+      }
+    }
+  }
+  const skillsPrefix = skillPrompts.length > 0 
+    ? "## Available Skills\n\n" + skillPrompts.join("\n\n") + "\n\n"
+    : "";
+
   const prompt = joinPromptSections([
     finalInstructionsPrefix,
+    skillsPrefix,
     wakePrompt,
     paperclipEnvNote,
     apiAccessNote,
@@ -345,6 +374,11 @@ const priorMessages: OllamaMessage[] = (() => {
             continue;
           }
 
+          if (parsed.error) {
+            const errorMsg = typeof parsed.error === "string" ? parsed.error : JSON.stringify(parsed.error);
+            throw new Error(`Ollama error: ${errorMsg}`);
+          }
+
           const isDone = parsed.done === true;
           const messageObj =
             typeof parsed.message === "object" && parsed.message !== null
@@ -361,13 +395,16 @@ const priorMessages: OllamaMessage[] = (() => {
             if (Array.isArray(messageObj.tool_calls)) {
               for (const tc of messageObj.tool_calls) {
                 const toolCall = tc as OllamaToolCall;
-                toolCalls.push(toolCall);
-                await onLog("stdout", JSON.stringify({
-                  type: "tool_call",
-                  name: toolCall.function.name,
-                  toolCallId: toolCall.id,
-                  input: toolCall.function.arguments,
-                }) + "\n");
+                // Avoid duplicates if Ollama sends the same tool call in multiple chunks (rare but possible)
+                if (!toolCalls.some(existing => existing.id === toolCall.id)) {
+                  toolCalls.push(toolCall);
+                  await onLog("stdout", JSON.stringify({
+                    type: "tool_call",
+                    name: toolCall.function.name,
+                    toolCallId: toolCall.id,
+                    input: toolCall.function.arguments,
+                  }) + "\n");
+                }
               }
             }
           }
@@ -378,8 +415,8 @@ const priorMessages: OllamaMessage[] = (() => {
             const doneLine: OllamaDoneLine = {
               type: "done",
               model: typeof parsed.model === "string" ? parsed.model : model,
-              prompt_eval_count: totalPromptEvalCount,
-              eval_count: totalEvalCount,
+              prompt_eval_count: typeof parsed.prompt_eval_count === "number" ? parsed.prompt_eval_count : totalPromptEvalCount,
+              eval_count: typeof parsed.eval_count === "number" ? parsed.eval_count : totalEvalCount,
               total_duration_ns: typeof parsed.total_duration === "number" ? parsed.total_duration : 0,
             };
             await onLog("stdout", JSON.stringify(doneLine) + "\n");

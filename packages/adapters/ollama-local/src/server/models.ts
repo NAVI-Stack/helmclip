@@ -1,8 +1,17 @@
 import { DEFAULT_OLLAMA_BASE_URL, models as staticModels } from "../index.js";
 
+function resolveOllamaBaseUrl(): string {
+  const envHost = process.env.OLLAMA_HOST || process.env.OLLAMA_BASE_URL;
+  if (envHost) {
+    return envHost.startsWith("http") ? envHost : `http://${envHost}`;
+  }
+  return DEFAULT_OLLAMA_BASE_URL;
+}
+
 export async function listOllamaModels(): Promise<{ id: string; label: string }[]> {
+  const baseUrl = resolveOllamaBaseUrl().replace(/\/$/, "");
   try {
-    const res = await fetch(`${DEFAULT_OLLAMA_BASE_URL}/api/tags`, {
+    const res = await fetch(`${baseUrl}/api/tags`, {
       signal: AbortSignal.timeout(3000),
     });
     if (!res.ok) return staticModels;

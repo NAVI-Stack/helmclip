@@ -43,6 +43,7 @@ Operational fields:
 Notes:
 - Ollama must be running before the agent executes: \`ollama serve\`
 - Pull models before first use: \`ollama pull llama3.2\`
+- The adapter resolves the base URL in order: \`config.baseUrl\`, \`process.env.OLLAMA_HOST\`, \`process.env.OLLAMA_BASE_URL\`, then defaults to \`http://localhost:11434\`.
 - Conversation history is stored in sessionParams and replayed across runs for context continuity.
 - This adapter calls the Ollama HTTP API directly (POST /api/chat), not via subprocess.
 - No API key is required for local Ollama.
