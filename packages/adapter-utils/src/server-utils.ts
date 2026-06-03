@@ -821,25 +821,42 @@ export function renderPaperclipWakePrompt(
     }
   }
 
+  if (normalized.reason === "finish_successful_run_handoff") {
+    const handoffInstruction = normalized.livenessContinuation?.instruction ?? null;
+    lines.push(
+      "",
+      "## Missing issue disposition (required)",
+      "",
+      "Your previous run succeeded, but this issue is still `in_progress`. You must record a valid final disposition via the Paperclip API before ending this heartbeat.",
+      "Use `paperclip_api` or `PATCH /api/issues/{issueId}` with a required `comment`. Comments, documents, and work products alone do not satisfy this handoff.",
+      "Do not perform new deliverable work in this recovery run unless it is required to choose the disposition.",
+    );
+    if (handoffInstruction) {
+      lines.push("", handoffInstruction);
+    }
+  }
+
   if (normalized.livenessContinuation) {
     const continuation = normalized.livenessContinuation;
-    lines.push("", "Run liveness continuation:");
-    if (continuation.attempt) {
-      lines.push(
-        `- attempt: ${continuation.attempt}${continuation.maxAttempts ? `/${continuation.maxAttempts}` : ""}`,
-      );
-    }
-    if (continuation.sourceRunId) {
-      lines.push(`- source run: ${continuation.sourceRunId}`);
-    }
-    if (continuation.state) {
-      lines.push(`- liveness state: ${continuation.state}`);
-    }
-    if (continuation.reason) {
-      lines.push(`- reason: ${continuation.reason}`);
-    }
-    if (continuation.instruction) {
-      lines.push(`- instruction: ${continuation.instruction}`);
+    if (normalized.reason !== "finish_successful_run_handoff") {
+      lines.push("", "Run liveness continuation:");
+      if (continuation.attempt) {
+        lines.push(
+          `- attempt: ${continuation.attempt}${continuation.maxAttempts ? `/${continuation.maxAttempts}` : ""}`,
+        );
+      }
+      if (continuation.sourceRunId) {
+        lines.push(`- source run: ${continuation.sourceRunId}`);
+      }
+      if (continuation.state) {
+        lines.push(`- liveness state: ${continuation.state}`);
+      }
+      if (continuation.reason) {
+        lines.push(`- reason: ${continuation.reason}`);
+      }
+      if (continuation.instruction) {
+        lines.push(`- instruction: ${continuation.instruction}`);
+      }
     }
   }
 

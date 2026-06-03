@@ -378,6 +378,7 @@ Recommended build order, highest value first:
 
 ### High Value
 
+0. **Inspector and Triage Pipeline (HEL-11)** -- [Plan](./plans/HEL-11-inspector-and-triage-pipeline.md). Automated system for detecting and triaging codebase issues.
 1. **Teams** -- `teams` table + `teamId` FK on issues. Foundation for
    human-readable identifiers (`ENG-123`) and per-team workflow states. Most
    other features depend on team scoping, so build this first.

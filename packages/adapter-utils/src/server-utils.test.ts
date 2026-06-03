@@ -929,6 +929,36 @@ describe("renderPaperclipWakePrompt", () => {
     expect(prompt).toContain("PAP-101 Implement helper (done)");
     expect(prompt).toContain("Added the helper route and tests.");
   });
+
+  it("renders a dedicated missing-disposition block for finish_successful_run_handoff wakes", () => {
+    const instruction =
+      "Your previous run on PAP-1 succeeded, but the issue is still in `in_progress`. Choose exactly one outcome.";
+    const prompt = renderPaperclipWakePrompt({
+      reason: "finish_successful_run_handoff",
+      issue: {
+        id: "issue-1",
+        identifier: "PAP-1",
+        title: "Finish handoff",
+        status: "in_progress",
+      },
+      livenessContinuation: {
+        attempt: 1,
+        maxAttempts: 1,
+        sourceRunId: "run-1",
+        state: null,
+        reason: null,
+        instruction,
+      },
+      commentWindow: { requestedCount: 0, includedCount: 0, missingCount: 0 },
+      comments: [],
+      fallbackFetchNeeded: false,
+    });
+
+    expect(prompt).toContain("## Missing issue disposition (required)");
+    expect(prompt).toContain("PATCH /api/issues/{issueId}");
+    expect(prompt).toContain(instruction);
+    expect(prompt).not.toContain("Run liveness continuation:");
+  });
 });
 
 describe("applyPaperclipWorkspaceEnv", () => {

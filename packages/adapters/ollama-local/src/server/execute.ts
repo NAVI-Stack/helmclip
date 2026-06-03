@@ -38,7 +38,7 @@ export interface OllamaToolCall {
   type: "function";
   function: {
     name: string;
-    arguments: string; // JSON string
+    arguments: any; // JSON string or object
   };
 }
 
@@ -85,15 +85,59 @@ function renderPaperclipEnvNote(env: Record<string, string>): string {
   ].join("\n");
 }
 
+const FINISH_SUCCESSFUL_RUN_HANDOFF_REASON = "finish_successful_run_handoff";
+const PAPERCLIP_SKILL_KEY = "paperclip";
+const ALLOWED_PAPERCLIP_API_PATH_RE = /^\/api\/issues(\/|$)/;
+
+export function isDispositionRecoveryContext(context: unknown): boolean {
+  const ctx = parseObject(context);
+  if (ctx.handoffRequired === true) return true;
+  if (asString(ctx.recoveryIntent, "") === "status_only") return true;
+  const wakeReason =
+    asString(parseObject(ctx.paperclipWake).reason, "") || asString(ctx.wakeReason, "");
+  return wakeReason === FINISH_SUCCESSFUL_RUN_HANDOFF_REASON;
+}
+
+export function isAllowedPaperclipApiPath(apiPath: string): boolean {
+  const normalized = apiPath.trim();
+  if (!normalized.startsWith("/")) return false;
+  return ALLOWED_PAPERCLIP_API_PATH_RE.test(normalized);
+}
+
+function readContextIssueId(context: unknown): string | null {
+  const ctx = parseObject(context);
+  const wakeIssue = parseObject(ctx.paperclipWake).issue;
+  const fromWake = asString(parseObject(wakeIssue).id, "").trim();
+  if (fromWake) return fromWake;
+  const direct = asString(ctx.issueId, "").trim() || asString(ctx.taskId, "").trim();
+  return direct || null;
+}
+
+function renderDispositionRequiredAppendix(issueId: string | null): string {
+  const issuePath = issueId ? `/api/issues/${issueId}` : "/api/issues/{issueId}";
+  return [
+    "## Disposition required",
+    "",
+    "Before ending this heartbeat, call `paperclip_api` to record a valid final issue disposition.",
+    "Prefer `paperclip_api` over manual curl. Comments alone do not satisfy disposition.",
+    "",
+    "Examples:",
+    `- Mark done: paperclip_api({ "method": "PATCH", "path": "${issuePath}", "body": { "status": "done", "comment": "Summary of what changed." } })`,
+    `- Mark blocked: paperclip_api({ "method": "PATCH", "path": "${issuePath}", "body": { "status": "blocked", "comment": "What is blocked and who unblocks it." } })`,
+    `- Send for review: paperclip_api({ "method": "PATCH", "path": "${issuePath}", "body": { "status": "in_review", "comment": "Ready for review." } })`,
+    "",
+    "",
+  ].join("\n");
+}
+
 function renderApiAccessNote(env: Record<string, string>): string {
-  if (!env.PAPERCLIP_API_URL || !env.PAPERCLIP_API_KEY) return "";
+  if (!env.PAPERCLIP_API_URL && !process.env.PAPERCLIP_API_KEY) return "";
   return [
     "Paperclip API access note:",
-    "Use run_shell_command with curl to make Paperclip API requests.",
+    "Prefer the `paperclip_api` tool for issue status updates (PATCH /api/issues/{id}).",
+    "Use run_shell_command with curl only when paperclip_api is insufficient.",
     "GET example:",
     `  run_shell_command({ command: "curl -s -H \\"Authorization: Bearer $PAPERCLIP_API_KEY\\" \\"$PAPERCLIP_API_URL/api/agents/me\\"" })`,
-    "POST/PATCH example:",
-    `  run_shell_command({ command: "curl -s -X POST -H \\"Authorization: Bearer $PAPERCLIP_API_KEY\\" -H 'Content-Type: application/json' -H \\"X-Paperclip-Run-Id: $PAPERCLIP_RUN_ID\\" -d '{...}' \\"$PAPERCLIP_API_URL/api/issues/{id}/checkout\\"" })`,
     "",
     "",
   ].join("\n");
@@ -101,6 +145,32 @@ function renderApiAccessNote(env: Record<string, string>): string {
 
 function buildPaperclipOllamaTools() {
   return [
+    {
+      type: "function",
+      function: {
+        name: "paperclip_api",
+        description:
+          "Call the Paperclip REST API for issue disposition. Required before ending a heartbeat when the issue is still in_progress. Use PATCH with status done, blocked, in_review, or cancelled and a comment.",
+        parameters: {
+          type: "object",
+          properties: {
+            method: {
+              type: "string",
+              description: "HTTP method: GET, POST, or PATCH.",
+            },
+            path: {
+              type: "string",
+              description: "API path starting with /api/issues/ (e.g. /api/issues/{issueId}).",
+            },
+            body: {
+              type: "object",
+              description: "Optional JSON body for POST or PATCH.",
+            },
+          },
+          required: ["method", "path"],
+        },
+      },
+    },
     {
       type: "function",
       function: {
@@ -119,6 +189,52 @@ function buildPaperclipOllamaTools() {
       },
     },
   ];
+}
+
+export async function executePaperclipApiCall(input: {
+  method: string;
+  path: string;
+  body?: Record<string, unknown> | null;
+  runId: string;
+  paperclipEnv: Record<string, string>;
+}): Promise<string> {
+  const method = input.method.trim().toUpperCase();
+  const apiPath = input.path.trim();
+  if (!["GET", "POST", "PATCH"].includes(method)) {
+    return `Error: unsupported method "${input.method}". Use GET, POST, or PATCH.`;
+  }
+  if (!isAllowedPaperclipApiPath(apiPath)) {
+    return `Error: path must start with /api/issues/. Received: ${apiPath}`;
+  }
+
+  const baseUrl = (
+    input.paperclipEnv.PAPERCLIP_API_URL ??
+    process.env.PAPERCLIP_API_URL ??
+    ""
+  ).replace(/\/$/, "");
+  const apiKey = process.env.PAPERCLIP_API_KEY ?? "";
+  if (!baseUrl) return "Error: PAPERCLIP_API_URL is not configured.";
+  if (!apiKey) return "Error: PAPERCLIP_API_KEY is not configured.";
+
+  const url = `${baseUrl}${apiPath.startsWith("/") ? apiPath : `/${apiPath}`}`;
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${apiKey}`,
+    "X-Paperclip-Run-Id": input.runId,
+  };
+  const init: RequestInit = { method, headers };
+  if (method === "POST" || method === "PATCH") {
+    headers["Content-Type"] = "application/json";
+    init.body = JSON.stringify(input.body ?? {});
+  }
+
+  try {
+    const response = await fetch(url, { ...init, signal: AbortSignal.timeout(60_000) });
+    const text = await response.text();
+    return `HTTP ${response.status}\n${text}`;
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    return `Error: ${msg}`;
+  }
 }
 
 /**
@@ -242,38 +358,49 @@ const priorMessages: OllamaMessage[] = (() => {
 
   const resumedSession = priorMessages.length > 0;
 
-  const wakePrompt = renderPaperclipWakePrompt(context.paperclipWake, { resumedSession });
+  const dispositionRecovery = isDispositionRecoveryContext(context);
+  const wakePrompt = renderPaperclipWakePrompt(context.paperclipWake, {
+    resumedSession: dispositionRecovery ? false : resumedSession,
+  });
   const paperclipEnv = buildPaperclipEnv(agent);
   const paperclipEnvNote = renderPaperclipEnvNote(paperclipEnv);
   const apiAccessNote = renderApiAccessNote(paperclipEnv);
+  const contextIssueId = readContextIssueId(context);
+  const dispositionAppendix = dispositionRecovery
+    ? renderDispositionRequiredAppendix(contextIssueId)
+    : "";
 
-  // If resuming, we omit the heavy instructions and prompt template if a wake prompt exists,
-  // as the model already has the context in its session history.
-  const shouldUseResumeDeltaPrompt = resumedSession && wakePrompt.length > 0;
+  const shouldUseResumeDeltaPrompt =
+    resumedSession && wakePrompt.length > 0 && !dispositionRecovery;
   const finalInstructionsPrefix = shouldUseResumeDeltaPrompt ? "" : instructionsPrefix;
   const finalRenderedPrompt = shouldUseResumeDeltaPrompt ? "" : renderedPrompt;
 
-  const desiredSkillNames = Array.isArray(config.paperclipDesiredSkills)
+  const configuredSkillNames = Array.isArray(config.paperclipDesiredSkills)
     ? config.paperclipDesiredSkills.filter((s): s is string => typeof s === "string")
     : [];
-  
+  const hasApiKey = Boolean(process.env.PAPERCLIP_API_KEY?.trim());
+  const skillNamesToLoad =
+    configuredSkillNames.length > 0
+      ? configuredSkillNames
+      : hasApiKey
+        ? [PAPERCLIP_SKILL_KEY]
+        : [];
+
   const skillPrompts: string[] = [];
-  if (desiredSkillNames.length > 0) {
-    for (const skillName of desiredSkillNames) {
-      const markdown = await readPaperclipSkillMarkdown(__moduleDir, skillName);
-      if (markdown) {
-        skillPrompts.push(`### Skill: ${skillName}\n\n${markdown}`);
-      }
+  for (const skillName of skillNamesToLoad) {
+    const markdown = await readPaperclipSkillMarkdown(__moduleDir, skillName);
+    if (markdown) {
+      skillPrompts.push(`### Skill: ${skillName}\n\n${markdown}`);
     }
   }
-  const skillsPrefix = skillPrompts.length > 0 
-    ? "## Available Skills\n\n" + skillPrompts.join("\n\n") + "\n\n"
-    : "";
+  const skillsPrefix =
+    skillPrompts.length > 0 ? "## Available Skills\n\n" + skillPrompts.join("\n\n") + "\n\n" : "";
 
   const prompt = joinPromptSections([
     finalInstructionsPrefix,
     skillsPrefix,
     wakePrompt,
+    dispositionAppendix,
     paperclipEnvNote,
     apiAccessNote,
     finalRenderedPrompt,
@@ -404,11 +531,19 @@ const priorMessages: OllamaMessage[] = (() => {
                 // Avoid duplicates if Ollama sends the same tool call in multiple chunks (rare but possible)
                 if (!toolCalls.some(existing => existing.id === toolCall.id)) {
                   toolCalls.push(toolCall);
+                  let inputArgs: Record<string, unknown> | string = toolCall.function.arguments;
+                  if (typeof toolCall.function.arguments === "string") {
+                    try {
+                      inputArgs = JSON.parse(toolCall.function.arguments);
+                    } catch {
+                      // fallback to raw string
+                    }
+                  }
                   await onLog("stdout", JSON.stringify({
                     type: "tool_call",
                     name: toolCall.function.name,
                     toolCallId: toolCall.id,
-                    input: toolCall.function.arguments,
+                    input: inputArgs,
                   }) + "\n");
                 }
               }
@@ -439,17 +574,46 @@ const priorMessages: OllamaMessage[] = (() => {
 
       // Execute tool calls
       for (const toolCall of toolCalls) {
-        if (toolCall.function.name === "run_shell_command") {
-          let args: Record<string, unknown>;
-          try {
+        let args: Record<string, unknown>;
+        try {
+          if (typeof toolCall.function.arguments === "string") {
             args = JSON.parse(toolCall.function.arguments);
-          } catch (err) {
-            const errorMsg = `Failed to parse tool arguments: ${err instanceof Error ? err.message : String(err)}`;
-            messages.push({ role: "tool", content: errorMsg, tool_call_id: toolCall.id });
-            await onLog("stderr", `[paperclip] ${errorMsg}\n`);
-            continue;
+          } else if (typeof toolCall.function.arguments === "object" && toolCall.function.arguments !== null) {
+            args = toolCall.function.arguments as Record<string, unknown>;
+          } else {
+            throw new Error("Arguments are neither a string nor an object");
           }
+        } catch (err) {
+          const errorMsg = `Failed to parse tool arguments: ${err instanceof Error ? err.message : String(err)}`;
+          messages.push({ role: "tool", content: errorMsg, tool_call_id: toolCall.id });
+          await onLog("stderr", `[paperclip] ${errorMsg}\n`);
+          continue;
+        }
 
+        if (toolCall.function.name === "paperclip_api") {
+          const method = asString(args.method, "");
+          const apiPath = asString(args.path, "");
+          const body =
+            args.body && typeof args.body === "object" && !Array.isArray(args.body)
+              ? (args.body as Record<string, unknown>)
+              : null;
+          await onLog("stdout", `[paperclip] paperclip_api ${method} ${apiPath}\n`);
+          const result = await executePaperclipApiCall({
+            method,
+            path: apiPath,
+            body,
+            runId,
+            paperclipEnv,
+          });
+          messages.push({ role: "tool", content: result, tool_call_id: toolCall.id });
+          await onLog(
+            "stdout",
+            JSON.stringify({ type: "tool_result", toolCallId: toolCall.id, content: result }) + "\n",
+          );
+          continue;
+        }
+
+        if (toolCall.function.name === "run_shell_command") {
           const command = asString(args.command, "");
           if (!command) {
             const errorMsg = "Missing 'command' argument for run_shell_command.";
@@ -461,18 +625,22 @@ const priorMessages: OllamaMessage[] = (() => {
           const proc = await runAdapterExecutionTargetProcess(runId, executionTarget, "sh", ["-c", command], {
             cwd: process.cwd(),
             env: { ...process.env, ...paperclipEnv },
-            timeoutSec: 60, // Individual tool timeout
+            timeoutSec: 60,
             onLog,
           });
 
           const result = `Exit code: ${proc.exitCode}\nSTDOUT:\n${proc.stdout}\nSTDERR:\n${proc.stderr}`;
           messages.push({ role: "tool", content: result, tool_call_id: toolCall.id });
-          await onLog("stdout", JSON.stringify({ type: "tool_result", toolCallId: toolCall.id, content: result }) + "\n");
-        } else {
-          const errorMsg = `Unknown tool: ${toolCall.function.name}`;
-          messages.push({ role: "tool", content: errorMsg, tool_call_id: toolCall.id });
-          await onLog("stderr", `[paperclip] ${errorMsg}\n`);
+          await onLog(
+            "stdout",
+            JSON.stringify({ type: "tool_result", toolCallId: toolCall.id, content: result }) + "\n",
+          );
+          continue;
         }
+
+        const errorMsg = `Unknown tool: ${toolCall.function.name}`;
+        messages.push({ role: "tool", content: errorMsg, tool_call_id: toolCall.id });
+        await onLog("stderr", `[paperclip] ${errorMsg}\n`);
       }
     }
   } catch (err) {

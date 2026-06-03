@@ -66,5 +66,19 @@ export function parseOllamaStdoutLine(line: string, ts: string): TranscriptEntry
     return [{ kind: "stdout", ts, text: `[error] ${message}` }];
   }
 
+  if (type === "tool_call") {
+    const name = asString(rec.name, "tool");
+    const toolUseId = asString(rec.toolCallId, asString(rec.tool_call_id, "tool_call"));
+    const input = rec.input ?? {};
+    return [{ kind: "tool_call", ts, name, toolUseId, input }];
+  }
+
+  if (type === "tool_result") {
+    const toolUseId = asString(rec.toolCallId, asString(rec.tool_call_id, "tool_result"));
+    const content = asString(rec.content, trimmed);
+    const isError = /^(Error:|HTTP [45]\d\d)/.test(content.trim());
+    return [{ kind: "tool_result", ts, toolUseId, content, isError }];
+  }
+
   return [{ kind: "stdout", ts, text: trimmed }];
 }

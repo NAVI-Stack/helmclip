@@ -83,6 +83,10 @@ describe("successful run handoff decision", () => {
     expect(decision.contextSnapshot).toMatchObject({
       wakeReason: FINISH_SUCCESSFUL_RUN_HANDOFF_REASON,
       handoffRequired: true,
+      livenessContinuationInstruction: expect.stringContaining("Resolve the missing disposition"),
+      livenessContinuationSourceRunId: "run-1",
+      livenessContinuationAttempt: 1,
+      livenessContinuationMaxAttempts: 1,
       modelProfile: "cheap",
       allowDeliverableWork: false,
       allowDocumentUpdates: false,

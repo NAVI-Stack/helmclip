@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { describeGeminiQuotaExhaustion, parseGeminiJsonl } from "./parse.js";
+import { describeGeminiQuotaExhaustion, parseGeminiJsonl, isGeminiUnknownSessionError } from "./parse.js";
 
 describe("parseGeminiJsonl", () => {
   it("collects assistant text from message events with string content", () => {
@@ -161,5 +161,21 @@ describe("describeGeminiQuotaExhaustion", () => {
     });
 
     expect(quota).toEqual({ exhausted: false, message: null });
+  });
+});
+
+describe("isGeminiUnknownSessionError", () => {
+  it("returns true for invalid session identifier errors", () => {
+    const stderr = 'Error resuming session: Invalid session identifier "b242c792-768c-4336-a76b-7d0928618ccf".';
+    expect(isGeminiUnknownSessionError("", stderr)).toBe(true);
+  });
+
+  it("returns true for unknown session or cannot resume errors", () => {
+    expect(isGeminiUnknownSessionError("", "session not found")).toBe(true);
+    expect(isGeminiUnknownSessionError("", "failed to resume session")).toBe(true);
+  });
+
+  it("returns false for unrelated errors", () => {
+    expect(isGeminiUnknownSessionError("", "rate limit exceeded")).toBe(false);
   });
 });

@@ -418,6 +418,10 @@ export function decideSuccessfulRunHandoff(input: {
       ...payload,
       wakeReason: FINISH_SUCCESSFUL_RUN_HANDOFF_REASON,
       livenessState: input.livenessState,
+      livenessContinuationInstruction: instruction,
+      livenessContinuationSourceRunId: run.id,
+      livenessContinuationAttempt: 1,
+      livenessContinuationMaxAttempts: DEFAULT_MAX_SUCCESSFUL_RUN_HANDOFF_ATTEMPTS,
     }, "status_only"),
   };
 }
