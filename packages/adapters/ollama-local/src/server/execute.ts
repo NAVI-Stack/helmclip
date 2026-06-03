@@ -101,7 +101,12 @@ export function isDispositionRecoveryContext(context: unknown): boolean {
 export function isAllowedPaperclipApiPath(apiPath: string): boolean {
   const normalized = apiPath.trim();
   if (!normalized.startsWith("/")) return false;
-  return ALLOWED_PAPERCLIP_API_PATH_RE.test(normalized);
+  if (normalized.includes("..")) return false;
+  return (
+    normalized.startsWith("/api/issues") ||
+    normalized.startsWith("/api/agents") ||
+    normalized.startsWith("/api/companies")
+  );
 }
 
 function readContextIssueId(context: unknown): string | null {
@@ -131,7 +136,7 @@ function renderDispositionRequiredAppendix(issueId: string | null): string {
 }
 
 function renderApiAccessNote(env: Record<string, string>): string {
-  if (!env.PAPERCLIP_API_URL && !process.env.PAPERCLIP_API_KEY) return "";
+  if (!env.PAPERCLIP_API_URL && !env.PAPERCLIP_API_KEY && !process.env.PAPERCLIP_API_KEY) return "";
   return [
     "Paperclip API access note:",
     "Prefer the `paperclip_api` tool for issue status updates (PATCH /api/issues/{id}).",
@@ -212,7 +217,10 @@ export async function executePaperclipApiCall(input: {
     process.env.PAPERCLIP_API_URL ??
     ""
   ).replace(/\/$/, "");
-  const apiKey = process.env.PAPERCLIP_API_KEY ?? "";
+  const apiKey =
+    input.paperclipEnv.PAPERCLIP_API_KEY ??
+    process.env.PAPERCLIP_API_KEY ??
+    "";
   if (!baseUrl) return "Error: PAPERCLIP_API_URL is not configured.";
   if (!apiKey) return "Error: PAPERCLIP_API_KEY is not configured.";
 
@@ -283,7 +291,7 @@ async function resolveModelName(
 export async function execute(
   ctx: AdapterExecutionContext,
 ): Promise<AdapterExecutionResult> {
-  const { runId, agent, runtime, config, context, onLog, onMeta } = ctx;
+  const { runId, agent, runtime, config, context, onLog, onMeta, authToken } = ctx;
 
   const baseUrl = asString(config.baseUrl, DEFAULT_OLLAMA_BASE_URL).replace(
     /\/$/,
@@ -291,6 +299,7 @@ export async function execute(
   );
   const rawModel = asString(config.model, DEFAULT_OLLAMA_MODEL).trim();
   const timeoutSec = asNumber(config.timeoutSec, 300);
+  const graceSec = asNumber(config.graceSec, 20);
   const temperature =
     typeof config.temperature === "number" && Number.isFinite(config.temperature)
       ? config.temperature
@@ -363,6 +372,9 @@ const priorMessages: OllamaMessage[] = (() => {
     resumedSession: dispositionRecovery ? false : resumedSession,
   });
   const paperclipEnv = buildPaperclipEnv(agent);
+  if (authToken) {
+    paperclipEnv.PAPERCLIP_API_KEY = authToken;
+  }
   const paperclipEnvNote = renderPaperclipEnvNote(paperclipEnv);
   const apiAccessNote = renderApiAccessNote(paperclipEnv);
   const contextIssueId = readContextIssueId(context);
@@ -378,7 +390,7 @@ const priorMessages: OllamaMessage[] = (() => {
   const configuredSkillNames = Array.isArray(config.paperclipDesiredSkills)
     ? config.paperclipDesiredSkills.filter((s): s is string => typeof s === "string")
     : [];
-  const hasApiKey = Boolean(process.env.PAPERCLIP_API_KEY?.trim());
+  const hasApiKey = Boolean(paperclipEnv.PAPERCLIP_API_KEY?.trim() || process.env.PAPERCLIP_API_KEY?.trim());
   const skillNamesToLoad =
     configuredSkillNames.length > 0
       ? configuredSkillNames
@@ -590,13 +602,33 @@ const priorMessages: OllamaMessage[] = (() => {
           continue;
         }
 
-        if (toolCall.function.name === "paperclip_api") {
-          const method = asString(args.method, "");
-          const apiPath = asString(args.path, "");
-          const body =
+        const rawToolName = toolCall.function.name;
+        const normName = rawToolName.toLowerCase().replace(/[^a-z0-9]/g, "");
+
+        if (normName === "paperclipapi") {
+          let method = asString(args.method, "");
+          let apiPath = asString(args.path, "");
+          let body =
             args.body && typeof args.body === "object" && !Array.isArray(args.body)
               ? (args.body as Record<string, unknown>)
               : null;
+
+          // Robust nesting detection for gemma models
+          if (!method && body && typeof body.method === "string") {
+            method = body.method;
+            delete body.method;
+          }
+          if (!apiPath && body && typeof body.path === "string") {
+            apiPath = body.path;
+            delete body.path;
+          }
+
+          // Auto-prefix path with /api/ if needed
+          if (apiPath && !apiPath.startsWith("/api/")) {
+            const trimmed = apiPath.trim().replace(/^\//, "");
+            apiPath = `/api/${trimmed}`;
+          }
+
           await onLog("stdout", `[paperclip] paperclip_api ${method} ${apiPath}\n`);
           const result = await executePaperclipApiCall({
             method,
@@ -613,7 +645,82 @@ const priorMessages: OllamaMessage[] = (() => {
           continue;
         }
 
-        if (toolCall.function.name === "run_shell_command") {
+        // Check if it matches any known paperclip/issue helper tools from MCP/hallucination
+        const isGetIssue = ["paperclipgetissue", "issueget", "paperclipissueget"].includes(normName);
+        const isUpdateIssue = ["paperclipupdateissue", "issueupdate", "paperclipissueupdate"].includes(normName);
+        const isCheckoutIssue = ["paperclipcheckoutissue", "checkoutissue", "paperclipissuecheckout"].includes(normName);
+        const isAddComment = ["paperclipaddcomment", "addcomment", "paperclipaddcommenttool", "paperclipissuecomment", "issuecomment"].includes(normName);
+        const isReleaseIssue = ["paperclipreleaseissue", "releaseissue", "paperclipissuerelease"].includes(normName);
+        const isInboxLite = ["paperclipinboxlite", "inboxlite", "paperclipinboxlitetool"].includes(normName);
+        const isMe = ["paperclipme", "me", "paperclipmetool"].includes(normName);
+
+        if (isGetIssue || isUpdateIssue || isCheckoutIssue || isAddComment || isReleaseIssue || isInboxLite || isMe) {
+          let method = "GET";
+          let apiPath = "";
+          let body: Record<string, unknown> | null = null;
+
+          const issueId = asString(args.issueId ?? args.issue_id ?? args.id, "");
+
+          if (isGetIssue) {
+            method = "GET";
+            apiPath = `/api/issues/${encodeURIComponent(issueId)}`;
+          } else if (isUpdateIssue) {
+            method = "PATCH";
+            apiPath = `/api/issues/${encodeURIComponent(issueId)}`;
+            body = { ...args };
+            delete body.issueId;
+            delete body.issue_id;
+            delete body.id;
+          } else if (isCheckoutIssue) {
+            method = "POST";
+            apiPath = `/api/issues/${encodeURIComponent(issueId)}/checkout`;
+            body = { ...args };
+            delete body.issueId;
+            delete body.issue_id;
+            delete body.id;
+            if (body.agentId === undefined && body.agent_id !== undefined) {
+              body.agentId = body.agent_id;
+              delete body.agent_id;
+            }
+          } else if (isAddComment) {
+            method = "POST";
+            apiPath = `/api/issues/${encodeURIComponent(issueId)}/comments`;
+            const commentVal = args.body ?? args.comment ?? args.content ?? args.text;
+            body = {
+              body: asString(commentVal, ""),
+              resume: args.resume === true,
+            };
+          } else if (isReleaseIssue) {
+            method = "POST";
+            apiPath = `/api/issues/${encodeURIComponent(issueId)}/release`;
+            body = {};
+          } else if (isInboxLite) {
+            method = "GET";
+            apiPath = `/api/agents/me/inbox-lite`;
+          } else if (isMe) {
+            method = "GET";
+            apiPath = `/api/agents/me`;
+          }
+
+          if (apiPath) {
+            await onLog("stdout", `[paperclip] Translating tool call ${rawToolName} to API call: ${method} ${apiPath}\n`);
+            const result = await executePaperclipApiCall({
+              method,
+              path: apiPath,
+              body,
+              runId,
+              paperclipEnv,
+            });
+            messages.push({ role: "tool", content: result, tool_call_id: toolCall.id });
+            await onLog(
+              "stdout",
+              JSON.stringify({ type: "tool_result", toolCallId: toolCall.id, content: result }) + "\n",
+            );
+            continue;
+          }
+        }
+
+        if (rawToolName === "run_shell_command") {
           const command = asString(args.command, "");
           if (!command) {
             const errorMsg = "Missing 'command' argument for run_shell_command.";
@@ -624,8 +731,13 @@ const priorMessages: OllamaMessage[] = (() => {
           await onLog("stdout", `[paperclip] Executing: ${command}\n`);
           const proc = await runAdapterExecutionTargetProcess(runId, executionTarget, "sh", ["-c", command], {
             cwd: process.cwd(),
-            env: { ...process.env, ...paperclipEnv },
+            env: Object.fromEntries(
+              Object.entries({ ...process.env, ...paperclipEnv }).filter(
+                (entry): entry is [string, string] => typeof entry[1] === "string",
+              ),
+            ),
             timeoutSec: 60,
+            graceSec,
             onLog,
           });
 
@@ -638,7 +750,7 @@ const priorMessages: OllamaMessage[] = (() => {
           continue;
         }
 
-        const errorMsg = `Unknown tool: ${toolCall.function.name}`;
+        const errorMsg = `Unknown tool: ${rawToolName}`;
         messages.push({ role: "tool", content: errorMsg, tool_call_id: toolCall.id });
         await onLog("stderr", `[paperclip] ${errorMsg}\n`);
       }

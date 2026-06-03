@@ -26,6 +26,7 @@ export async function listOllamaSkills(
     desiredSkills,
     entries: availableEntries.map((entry) => ({
       ...entry,
+      desired: desiredSkills.includes(entry.key),
       managed: true,
       state: desiredSkills.includes(entry.key) ? "installed" : "available",
     })),

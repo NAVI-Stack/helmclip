@@ -7,6 +7,15 @@ import {
 } from './execute.js';
 import type { AdapterExecutionContext } from '@paperclipai/adapter-utils';
 
+vi.mock('@paperclipai/adapter-utils/execution-target', () => ({
+  readAdapterExecutionTarget: vi.fn(() => ({ kind: 'local' })),
+  runAdapterExecutionTargetProcess: vi.fn().mockResolvedValue({
+    exitCode: 0,
+    stdout: 'hello\n',
+    stderr: '',
+  }),
+}));
+
 describe('ollama disposition helpers', () => {
   it('detects disposition recovery context from handoff wake reason', () => {
     expect(
@@ -20,10 +29,12 @@ describe('ollama disposition helpers', () => {
     expect(isDispositionRecoveryContext({ paperclipWake: { reason: 'issue_assigned' } })).toBe(false);
   });
 
-  it('restricts paperclip_api paths to /api/issues', () => {
+  it('restricts paperclip_api paths to allowed api roots', () => {
     expect(isAllowedPaperclipApiPath('/api/issues/issue-1')).toBe(true);
     expect(isAllowedPaperclipApiPath('/api/issues/issue-1/checkout')).toBe(true);
-    expect(isAllowedPaperclipApiPath('/api/agents/me')).toBe(false);
+    expect(isAllowedPaperclipApiPath('/api/agents/me')).toBe(true);
+    expect(isAllowedPaperclipApiPath('/api/companies/some-company')).toBe(true);
+    expect(isAllowedPaperclipApiPath('/other/path')).toBe(false);
   });
 
   it('executes paperclip_api via fetch', async () => {

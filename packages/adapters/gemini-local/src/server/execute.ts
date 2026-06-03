@@ -600,7 +600,7 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
       structuredFailure ||
       stderrLine ||
       `Gemini exited with code ${attempt.proc.exitCode ?? -1}`;
-    const failed = (attempt.proc.exitCode ?? 0) !== 0;
+    const failed = (attempt.proc.exitCode ?? 0) !== 0 || attempt.proc.signal != null || isGeminiUnknownSessionError(attempt.proc.stdout, attempt.proc.stderr);
     const clearSessionForTurnLimit = isGeminiTurnLimitResult(
       attempt.parsed.resultEvent,
       attempt.proc.exitCode,
@@ -674,7 +674,6 @@ export async function execute(ctx: AdapterExecutionContext): Promise<AdapterExec
     if (
       sessionId &&
       !initial.proc.timedOut &&
-      (initial.proc.exitCode ?? 0) !== 0 &&
       isGeminiUnknownSessionError(initial.proc.stdout, initial.proc.stderr)
     ) {
       await onLog(

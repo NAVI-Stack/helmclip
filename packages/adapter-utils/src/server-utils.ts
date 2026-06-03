@@ -1321,9 +1321,50 @@ async function resolveSpawnTarget(
 }
 
 export function ensurePathInEnv(env: NodeJS.ProcessEnv): NodeJS.ProcessEnv {
+  let pathValue = "";
+  if (typeof env.PATH === "string" && env.PATH.length > 0) {
+    pathValue = env.PATH;
+  } else if (typeof env.Path === "string" && env.Path.length > 0) {
+    pathValue = env.Path;
+  } else {
+    pathValue = defaultPathForPlatform();
+  }
+
+  if (process.platform === "win32") {
+    const dirs = pathValue.split(";").filter(Boolean);
+    const gitCmdPaths = dirs.filter((d) => /[\\/]Git[\\/]cmd$/i.test(d));
+    const gitBinPaths = gitCmdPaths.map((d) => path.join(path.dirname(d), "bin"));
+    
+    // Fallback to common default if Git\cmd is not in PATH
+    const defaultGitBin = "C:\\Program Files\\Git\\bin";
+    if (gitBinPaths.length === 0 && !dirs.some((d) => d.toLowerCase() === defaultGitBin.toLowerCase())) {
+      gitBinPaths.push(defaultGitBin);
+    }
+    
+    const newDirs = [...dirs];
+    let changed = false;
+    for (const b of gitBinPaths) {
+      if (!dirs.some((d) => d.toLowerCase() === b.toLowerCase())) {
+        newDirs.push(b);
+        changed = true;
+      }
+    }
+    
+    if (changed) {
+      const next = { ...env };
+      delete next.Path;
+      next.PATH = newDirs.join(";");
+      return next;
+    }
+  }
+
   if (typeof env.PATH === "string" && env.PATH.length > 0) return env;
   if (typeof env.Path === "string" && env.Path.length > 0) return env;
-  return { ...env, PATH: defaultPathForPlatform() };
+  
+  const next = { ...env };
+  delete next.Path;
+  next.PATH = pathValue;
+  return next;
 }
 
 export async function ensureAbsoluteDirectory(
