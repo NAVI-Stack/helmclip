@@ -20,7 +20,7 @@ Adapter: ollama_local
 
 Use when:
 - You want to run a free/local LLM via Ollama on the host machine
-- You need open-source models like Llama, Mistral, CodeLlama, DeepSeek, or Phi
+- You need open-source models like Llama 3.1/3.2, Mistral, CodeLlama, DeepSeek, or Phi
 - You have a GPU-equipped machine with Ollama installed and want zero API cost
 - Privacy is critical and you cannot send data to external LLM providers
 - You want to use any custom or fine-tuned model available in the Ollama registry
@@ -47,4 +47,6 @@ Notes:
 - Conversation history is stored in sessionParams and replayed across runs for context continuity.
 - This adapter calls the Ollama HTTP API directly (POST /api/chat), not via subprocess.
 - No API key is required for local Ollama.
+- **First-class support:** Includes robust tool calling (run_shell_command) and seamless Paperclip skills integration.
+- **Vision support:** The adapter is prepared for vision models (base64 images) when supported by the agent context.
 `;

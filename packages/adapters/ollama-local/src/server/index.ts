@@ -10,7 +10,7 @@ function isOllamaMessage(value: unknown): value is OllamaMessage {
   if (typeof value !== "object" || value === null || Array.isArray(value)) return false;
   const rec = value as Record<string, unknown>;
   return (
-    (rec.role === "system" || rec.role === "user" || rec.role === "assistant") &&
+    (rec.role === "system" || rec.role === "user" || rec.role === "assistant" || rec.role === "tool") &&
     typeof rec.content === "string"
   );
 }

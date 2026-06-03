@@ -28,6 +28,7 @@ const __moduleDir = path.dirname(fileURLToPath(import.meta.url));
 export interface OllamaMessage {
   role: "system" | "user" | "assistant" | "tool";
   content: string;
+  images?: string[]; // base64 encoded images
   tool_calls?: OllamaToolCall[];
   tool_call_id?: string; // For 'tool' role
 }
@@ -66,7 +67,9 @@ export type OllamaStdoutLine =
   | OllamaErrorLine;
 
 const DEFAULT_SYSTEM_PROMPT =
-  "You are a helpful AI assistant integrated into the Paperclip control plane. Respond concisely and helpfully.";
+  "You are a senior software engineer and autonomous agent operating within the Paperclip control plane. " +
+  "Your goal is to fulfill user requests efficiently by executing shell commands, analyzing code, and collaborating with other agents. " +
+  "Respond concisely and always prioritize actionable progress.";
 
 function renderPaperclipEnvNote(env: Record<string, string>): string {
   const paperclipKeys = Object.keys(env)
@@ -345,7 +348,10 @@ const priorMessages: OllamaMessage[] = (() => {
 
       if (!response.ok) {
         const bodyText = await response.text().catch(() => "");
-        const errMsg = bodyText.trim() || `HTTP ${response.status} ${response.statusText}`;
+        let errMsg = bodyText.trim() || `HTTP ${response.status} ${response.statusText}`;
+        if (response.status === 404 && errMsg.toLowerCase().includes("not found")) {
+          errMsg += ` (Hint: Run 'ollama pull ${model}')`;
+        }
         throw new Error(`Ollama returned ${response.status}: ${errMsg}`);
       }
 

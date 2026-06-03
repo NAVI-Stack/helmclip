@@ -132,4 +132,45 @@ describe('ollama_local execute', () => {
     // Verify tool was "executed" (mockCtx.onLog should have been called)
     expect(mockCtx.onLog).toHaveBeenCalledWith('stdout', expect.stringContaining('Executing: echo hello'));
   });
+
+  it('should preserve tool-related roles in sessionParams', async () => {
+    const mockFetch = vi.mocked(fetch);
+
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      json: async () => ({ models: [{ name: 'llama3.2:latest' }] }),
+    } as Response);
+
+    const chunks = [
+      JSON.stringify({ message: { role: 'assistant', content: 'Done' }, done: true }),
+    ];
+
+    mockFetch.mockResolvedValueOnce({
+      ok: true,
+      body: new ReadableStream({
+        start(controller) {
+          for (const chunk of chunks) controller.enqueue(new TextEncoder().encode(chunk + '\n'));
+          controller.close();
+        },
+      }),
+    } as Response);
+
+    const result = await execute({
+      ...mockCtx,
+      runtime: {
+        sessionParams: {
+          messages: [
+            { role: 'user', content: 'Run echo' },
+            { role: 'assistant', content: '', tool_calls: [{ id: '1', type: 'function', function: { name: 'run_shell_command', arguments: '{"command":"echo"}' } }] },
+            { role: 'tool', content: 'echo output', tool_call_id: '1' },
+          ],
+        },
+      } as any,
+    });
+
+    expect(result.exitCode).toBe(0);
+    // sessionParams in result should include the new assistant message AND the prior ones
+    const sessionMessages = (result.sessionParams as any).messages;
+    expect(sessionMessages.some((m: any) => m.role === 'tool')).toBe(true);
+  });
 });
