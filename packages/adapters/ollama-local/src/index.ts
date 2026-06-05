@@ -2,7 +2,7 @@ export const type = "ollama_local";
 export const label = "Ollama (local)";
 
 export const DEFAULT_OLLAMA_MODEL = "llama3.2";
-export const DEFAULT_OLLAMA_BASE_URL = "http://localhost:11434";
+export const DEFAULT_OLLAMA_BASE_URL = "http://127.0.0.1:11434";
 
 export const models = [
   { id: DEFAULT_OLLAMA_MODEL, label: "Llama 3.2" },

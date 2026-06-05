@@ -173,6 +173,9 @@ describe("isGeminiUnknownSessionError", () => {
   it("returns true for unknown session or cannot resume errors", () => {
     expect(isGeminiUnknownSessionError("", "session not found")).toBe(true);
     expect(isGeminiUnknownSessionError("", "failed to resume session")).toBe(true);
+    expect(
+      isGeminiUnknownSessionError("", "Error resuming session: No previous sessions found for this project."),
+    ).toBe(true);
   });
 
   it("returns false for unrelated errors", () => {

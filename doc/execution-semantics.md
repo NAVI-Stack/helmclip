@@ -396,6 +396,20 @@ Recovery rule:
 
 This is an active-work continuity recovery.
 
+#### Common `issue_continuation_needed` root causes
+
+When the recovery card shows evidence `issue_continuation_needed`, Paperclip already retried once and the issue is still stranded. Inspect the linked source run before resolving recovery:
+
+| Symptom in run evidence | Likely cause | Fix |
+| --- | --- | --- |
+| `adapter_failed` + `No previous sessions found for this project` | Continuation reused a saved CLI session that no longer exists in the project workspace (cwd change, cleared CLI state, or first run in that repo). Adapters should fall back to a fresh session; if this still appears, upgrade Paperclip. | Resolve recovery → **Try again**, or manually move the source issue to `todo`. Confirm the agent workspace path matches the project. |
+| `adapter_failed` + `fetch failed` | Adapter could not reach its upstream API/CLI service (network, auth, or process not running). | Restore connectivity/auth for the adapter (Ollama, Gemini, Cursor, etc.), then **Try again**. |
+| `gemini_quota_exhausted` / `budget_blocked` | Provider quota or company budget hard-stop. | Wait for quota reset, raise budget, or reassign to an agent with a working adapter. |
+| Latest run `succeeded` but issue still `in_progress` | Agent finished without a valid disposition (`done`, `in_review`, `blocked`, or delegated follow-up). | Recovery owner records the correct disposition or queues real continuation work. |
+| `cancelled` + `issue_assignee_changed` | Recovery reassigned the issue (for example to CTO) while a queued retry was still pending. | Expected during escalation; use **Try again** after fixing the underlying adapter/runtime issue. |
+
+The recovery owner (often CTO/manager) is temporary. `returnOwnerAgentId` on the card is the assignee that should resume source work once liveness is restored.
+
 ### 9.3 Recovery model-profile lane
 
 Cheap model profiles are only for status-only operational recovery overhead. Paperclip may request `modelProfile: "cheap"` for bounded recovery-owner work that updates task liveness, clears bad status, records a disposition, or asks for human/manager intervention. Those wakes must carry guard context such as `allowDeliverableWork: false`, `allowDocumentUpdates: false`, and `resumeRequiresNormalModel: true`.
