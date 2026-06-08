@@ -873,7 +873,7 @@ export function pluginLoader(
         await execFileAsync(
           "npm",
           ["install", spec, "--prefix", targetInstallDir, "--save", "--ignore-scripts"],
-          { timeout: 120_000 }, // 2 minute timeout for npm install
+          { timeout: 120_000, shell: process.platform === "win32" }, // 2 minute timeout for npm install
         );
       } catch (err) {
         throw new Error(`npm install failed for ${spec}: ${String(err)}`);
@@ -1508,7 +1508,7 @@ export function pluginLoader(
           await execFileAsync(
             "npm",
             ["uninstall", plugin.packageName, "--prefix", localPluginDir, "--ignore-scripts"],
-            { timeout: 120_000 },
+            { timeout: 120_000, shell: process.platform === "win32" },
           );
         } catch (err) {
           log.warn(

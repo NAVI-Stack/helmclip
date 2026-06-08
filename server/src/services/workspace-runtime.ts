@@ -31,7 +31,32 @@ import { readExecutionWorkspaceConfig } from "./execution-workspaces.js";
 import { readProjectWorkspaceRuntimeConfig } from "./project-workspace-runtime-config.js";
 
 export function resolveShell(): string {
-  const fallback = process.platform === "win32" ? "sh" : "/bin/sh";
+  if (process.platform === "win32") {
+    const gitPaths = [
+      "C:\\Program Files\\Git\\bin",
+      "C:\\Program Files\\Git\\usr\\bin",
+      "C:\\Program Files (x86)\\Git\\bin",
+      "C:\\Program Files (x86)\\Git\\usr\\bin",
+    ];
+    const localAppData = process.env.LOCALAPPDATA;
+    if (localAppData) {
+      gitPaths.push(
+        path.join(localAppData, "Programs", "Git", "bin"),
+        path.join(localAppData, "Programs", "Git", "usr", "bin")
+      );
+    }
+    const currentPath = process.env.PATH || "";
+    const paths = currentPath.split(path.delimiter).map(p => path.resolve(p.trim()));
+    const toAdd = gitPaths.filter(p => existsSync(p) && !paths.includes(path.resolve(p)));
+    if (toAdd.length > 0) {
+      process.env.PATH = [...toAdd, ...currentPath.split(path.delimiter)].join(path.delimiter);
+    }
+  }
+
+  let fallback = "sh";
+  if (process.platform !== "win32") {
+    fallback = "/bin/sh";
+  }
   const shell = process.env.SHELL?.trim();
   if (!shell) return fallback;
   if (path.isAbsolute(shell) && !existsSync(shell)) return fallback;
@@ -273,7 +298,7 @@ export async function ensureServerWorkspaceLinksCurrent(
     const linkPath = path.join(workspaceRoot, "server", "node_modules", ...mismatch.packageName.split("/"));
     await fs.mkdir(path.dirname(linkPath), { recursive: true });
     await fs.rm(linkPath, { recursive: true, force: true });
-    await fs.symlink(mismatch.expectedPath, linkPath);
+    await fs.symlink(mismatch.expectedPath, linkPath, process.platform === "win32" ? "junction" : "dir");
   }
 
   const remainingMismatches = findServerWorkspaceLinkMismatches(workspaceRoot);
@@ -479,6 +504,35 @@ async function executeProcess(input: {
   stdoutBytes: number;
   stderrBytes: number;
 }> {
+  const env = { ...(input.env ?? process.env) };
+  if (process.platform === "win32") {
+    const systemRoot = env.SystemRoot || process.env.SystemRoot || "C:\\Windows";
+    const gitPaths = [
+      path.join(systemRoot, "System32"),
+      systemRoot,
+      "C:\\Program Files\\Git\\cmd",
+      "C:\\Program Files\\Git\\bin",
+      "C:\\Program Files\\Git\\usr\\bin",
+      "C:\\Program Files (x86)\\Git\\cmd",
+      "C:\\Program Files (x86)\\Git\\bin",
+      "C:\\Program Files (x86)\\Git\\usr\\bin",
+    ];
+    const localAppData = env.LOCALAPPDATA || process.env.LOCALAPPDATA;
+    if (localAppData) {
+      gitPaths.push(
+        path.join(localAppData, "Programs", "Git", "cmd"),
+        path.join(localAppData, "Programs", "Git", "bin"),
+        path.join(localAppData, "Programs", "Git", "usr", "bin")
+      );
+    }
+    const currentPath = env.PATH || "";
+    const paths = currentPath.split(path.delimiter).map(p => path.resolve(p.trim()));
+    const toAdd = gitPaths.filter(p => existsSync(p) && !paths.includes(path.resolve(p)));
+    if (toAdd.length > 0) {
+      env.PATH = [...toAdd, ...currentPath.split(path.delimiter)].join(path.delimiter);
+    }
+  }
+
   const proc = await new Promise<{
     stdout: ProcessOutputAccumulator;
     stderr: ProcessOutputAccumulator;
@@ -487,7 +541,7 @@ async function executeProcess(input: {
     const child = spawn(input.command, input.args, {
       cwd: input.cwd,
       stdio: ["ignore", "pipe", "pipe"],
-      env: input.env ?? process.env,
+      env,
     });
     const stdout = createProcessOutputCapture(input.maxStdoutBytes ?? DEFAULT_EXECUTE_PROCESS_OUTPUT_BYTES);
     const stderr = createProcessOutputCapture(input.maxStderrBytes ?? DEFAULT_EXECUTE_PROCESS_OUTPUT_BYTES);

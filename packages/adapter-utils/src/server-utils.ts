@@ -1210,7 +1210,15 @@ async function resolveCommandPath(command: string, cwd: string, env: NodeJS.Proc
   const hasPathSeparator = command.includes("/") || command.includes("\\");
   if (hasPathSeparator) {
     const absolute = path.isAbsolute(command) ? command : path.resolve(cwd, command);
-    return (await pathExists(absolute)) ? absolute : null;
+    if (process.platform === "win32") {
+      const exts = windowsPathExts(env);
+      for (const ext of exts) {
+        const candidate = `${absolute}${ext}`;
+        if (await pathExists(candidate)) return candidate;
+      }
+    }
+    if (await pathExists(absolute)) return absolute;
+    return null;
   }
 
   const pathValue = env.PATH ?? env.Path ?? "";
@@ -1855,8 +1863,10 @@ export function writePaperclipSkillSyncPreference(
 export async function ensurePaperclipSkillSymlink(
   source: string,
   target: string,
-  linkSkill: (source: string, target: string) => Promise<void> = (linkSource, linkTarget) =>
-    fs.symlink(linkSource, linkTarget),
+  linkSkill: (source: string, target: string) => Promise<void> = async (linkSource, linkTarget) => {
+    const isDir = await fs.stat(linkSource).then((s) => s.isDirectory()).catch(() => true);
+    await fs.symlink(linkSource, linkTarget, process.platform === "win32" ? (isDir ? "junction" : "file") : undefined);
+  },
 ): Promise<"created" | "repaired" | "skipped"> {
   const existing = await fs.lstat(target).catch(() => null);
   if (!existing) {

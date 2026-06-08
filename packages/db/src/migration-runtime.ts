@@ -77,6 +77,44 @@ async function findAvailablePort(startPort: number): Promise<number> {
   );
 }
 
+async function canReuseEmbeddedPostgres(
+  adminConnectionString: string,
+  dataDir: string,
+): Promise<boolean> {
+  try {
+    const actualDataDir = await getPostgresDataDirectory(adminConnectionString);
+    const matchesDataDir =
+      typeof actualDataDir === "string" &&
+      path.resolve(actualDataDir) === path.resolve(dataDir);
+    if (!matchesDataDir) return false;
+    await ensurePostgresDatabase(adminConnectionString, "paperclip");
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+async function removeStalePostmasterPid(postmasterPidFile: string): Promise<void> {
+  if (!existsSync(postmasterPidFile)) return;
+
+  let lastError: unknown = null;
+  for (let attempt = 0; attempt < 5; attempt += 1) {
+    try {
+      rmSync(postmasterPidFile, { force: true });
+      return;
+    } catch (error) {
+      lastError = error;
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+  }
+
+  const detail = lastError instanceof Error ? lastError.message : String(lastError ?? "unknown error");
+  throw new Error(
+    `Failed to remove stale embedded PostgreSQL lock file at ${postmasterPidFile}: ${detail}. ` +
+      "Stop any old Paperclip/PostgreSQL process that may still hold it, then retry.",
+  );
+}
+
 async function loadEmbeddedPostgresCtor(): Promise<EmbeddedPostgresCtor> {
   try {
     const mod = await import("embedded-postgres");
@@ -103,15 +141,7 @@ async function ensureEmbeddedPostgresConnection(
   const logBuffer = createEmbeddedPostgresLogBuffer();
 
   if (!runningPid && existsSync(pgVersionFile)) {
-    try {
-      const actualDataDir = await getPostgresDataDirectory(preferredAdminConnectionString);
-      const matchesDataDir =
-        typeof actualDataDir === "string" &&
-        path.resolve(actualDataDir) === path.resolve(dataDir);
-      if (!matchesDataDir) {
-        throw new Error("reachable postgres does not use the expected embedded data directory");
-      }
-      await ensurePostgresDatabase(preferredAdminConnectionString, "paperclip");
+    if (await canReuseEmbeddedPostgres(preferredAdminConnectionString, dataDir)) {
       process.emitWarning(
         `Adopting an existing PostgreSQL instance on port ${preferredPort} for embedded data dir ${dataDir} because postmaster.pid is missing.`,
       );
@@ -120,20 +150,19 @@ async function ensureEmbeddedPostgresConnection(
         source: `embedded-postgres@${preferredPort}`,
         stop: async () => {},
       };
-    } catch {
-      // Fall through and attempt to start the configured embedded cluster.
     }
   }
 
   if (runningPid) {
     const port = runningPort ?? preferredPort;
     const adminConnectionString = `postgres://paperclip:paperclip@127.0.0.1:${port}/postgres`;
-    await ensurePostgresDatabase(adminConnectionString, "paperclip");
-    return {
-      connectionString: `postgres://paperclip:paperclip@127.0.0.1:${port}/paperclip`,
-      source: `embedded-postgres@${port}`,
-      stop: async () => {},
-    };
+    if (await canReuseEmbeddedPostgres(adminConnectionString, dataDir)) {
+      return {
+        connectionString: `postgres://paperclip:paperclip@127.0.0.1:${port}/paperclip`,
+        source: `embedded-postgres@${port}`,
+        stop: async () => {},
+      };
+    }
   }
 
   const instance = new EmbeddedPostgres({
@@ -159,7 +188,7 @@ async function ensureEmbeddedPostgresConnection(
     }
   }
   if (existsSync(postmasterPidFile)) {
-    rmSync(postmasterPidFile, { force: true });
+    await removeStalePostmasterPid(postmasterPidFile);
   }
   try {
     await instance.start();

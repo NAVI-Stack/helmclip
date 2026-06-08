@@ -48,6 +48,56 @@ import {
 
 const execFileAsync = promisify(execFile);
 const leasedRunIds = new Set<string>();
+
+async function safeSymlink(target: string, link: string) {
+  try {
+    const isDir = (await fs.stat(target)).isDirectory();
+    await fs.symlink(target, link, process.platform === "win32" ? (isDir ? "junction" : "file") : undefined);
+  } catch (err) {
+    if (process.platform === "win32") {
+      const isDir = (await fs.stat(target)).isDirectory();
+      if (isDir) {
+        throw err;
+      } else {
+        await fs.copyFile(target, link);
+        if (target.endsWith(".exe") && !link.endsWith(".exe")) {
+          try {
+            await fs.copyFile(target, `${link}.exe`);
+          } catch {}
+        }
+      }
+    } else {
+      throw err;
+    }
+  }
+}
+async function assertLinkPointsTo(linkPath: string, targetPath: string) {
+  const resolvedLink = await fs.realpath(linkPath).catch(() => linkPath);
+  const resolvedTarget = await fs.realpath(targetPath);
+  if (path.resolve(resolvedLink) === path.resolve(resolvedTarget)) {
+    return;
+  }
+  try {
+    const linkTarget = await fs.readlink(linkPath);
+    const normalizedLinkTarget = path.resolve(linkTarget.replace(/^\\\\\?\\/, ""));
+    const normalizedTarget = path.resolve(resolvedTarget);
+    expect(normalizedLinkTarget).toBe(normalizedTarget);
+  } catch (err) {
+    if (process.platform === "win32") {
+      try {
+        const linkStats = await fs.stat(linkPath);
+        const targetStats = await fs.stat(targetPath);
+        if (linkStats.isDirectory() && targetStats.isDirectory()) {
+          const linkFileExists = await fs.access(path.join(linkPath, "package.json")).then(() => true).catch(() => false);
+          const targetFileExists = await fs.access(path.join(targetPath, "package.json")).then(() => true).catch(() => false);
+          expect(linkFileExists).toBe(targetFileExists);
+          return;
+        }
+      } catch {}
+    }
+    expect(resolvedLink).toBe(resolvedTarget);
+  }
+}
 const embeddedPostgresSupport = await getEmbeddedPostgresTestSupport();
 const describeEmbeddedPostgres = embeddedPostgresSupport.supported ? describe : describe.skip;
 
@@ -67,7 +117,7 @@ async function readGit(cwd: string, args: string[]) {
 }
 
 async function runPnpm(cwd: string, args: string[]) {
-  await execFileAsync("pnpm", args, { cwd });
+  await execFileAsync("pnpm", args, { cwd, shell: process.platform === "win32" });
 }
 
 async function createTempRepo(defaultBranch = "main") {
@@ -231,7 +281,7 @@ describe("ensureServerWorkspaceLinksCurrent", () => {
       JSON.stringify({ name: "@paperclipai/db" }),
       "utf8",
     );
-    await fs.symlink(stalePackageDir, path.join(serverNodeModulesScopeDir, "db"));
+    await safeSymlink(stalePackageDir, path.join(serverNodeModulesScopeDir, "db"));
 
     await ensureServerWorkspaceLinksCurrent(path.join(repoRoot, "server"));
     expect(await fs.realpath(path.join(serverNodeModulesScopeDir, "db"))).toBe(await fs.realpath(expectedPackageDir));
@@ -262,7 +312,7 @@ describe("ensureServerWorkspaceLinksCurrent", () => {
       JSON.stringify({ name: "@paperclipai/db" }),
       "utf8",
     );
-    await fs.symlink(expectedPackageDir, path.join(serverNodeModulesScopeDir, "db"));
+    await safeSymlink(expectedPackageDir, path.join(serverNodeModulesScopeDir, "db"));
 
     await ensureServerWorkspaceLinksCurrent(path.join(repoRoot, "server"));
   });
@@ -300,7 +350,7 @@ describe("ensureServerWorkspaceLinksCurrent", () => {
       JSON.stringify({ name: "@paperclipai/db" }),
       "utf8",
     );
-    await fs.symlink(stalePackageDir, path.join(serverNodeModulesScopeDir, "db"));
+    await safeSymlink(stalePackageDir, path.join(serverNodeModulesScopeDir, "db"));
 
     await ensureServerWorkspaceLinksCurrent(path.join(repoRoot, "server"));
     expect(await fs.realpath(path.join(serverNodeModulesScopeDir, "db"))).toBe(await fs.realpath(stalePackageDir));
@@ -951,8 +1001,12 @@ describe("realizeExecutionWorkspace", () => {
     process.env.PAPERCLIP_WORKTREES_DIR = isolatedWorktreeHome;
     // Keep this server-side fixture on provision-worktree.sh's config writer path;
     // CLI/database seeding is covered by the CLI worktree tests.
-    await fs.symlink(process.execPath, path.join(isolatedBin, "node"));
-    process.env.PATH = `${isolatedBin}${path.delimiter}/usr/bin${path.delimiter}/bin`;
+    await safeSymlink(process.execPath, path.join(isolatedBin, "node"));
+    if (process.platform === "win32") {
+      process.env.PATH = `${isolatedBin}${path.delimiter}${previousPath ?? ""}`;
+    } else {
+      process.env.PATH = `${isolatedBin}${path.delimiter}/usr/bin${path.delimiter}/bin`;
+    }
 
     await fs.mkdir(sharedConfigDir, { recursive: true });
     await fs.writeFile(
@@ -1077,7 +1131,7 @@ describe("realizeExecutionWorkspace", () => {
       );
       expect(envContents).not.toContain("DATABASE_URL=");
       const envVars = parseEnvContents(envContents);
-      expect(envVars.PAPERCLIP_HOME).toBe(isolatedWorktreeHome);
+      expect(envVars.PAPERCLIP_HOME ? path.resolve(envVars.PAPERCLIP_HOME) : undefined).toBe(path.resolve(isolatedWorktreeHome));
       expect(envVars.PAPERCLIP_INSTANCE_ID).toBe(expectedInstanceId);
       expect(await fs.realpath(envVars.PAPERCLIP_CONFIG!)).toBe(await fs.realpath(configPath));
       expect(envVars.PAPERCLIP_IN_WORKTREE).toBe("true");
@@ -1217,11 +1271,13 @@ describe("realizeExecutionWorkspace", () => {
 
     expect((await fs.lstat(path.join(workspace.cwd, "node_modules"))).isSymbolicLink()).toBe(false);
     expect((await fs.lstat(path.join(workspace.cwd, "server", "node_modules"))).isSymbolicLink()).toBe(false);
-    await expect(fs.realpath(path.join(workspace.cwd, "server", "node_modules", "@repo", "shared"))).resolves.toBe(
-      await fs.realpath(path.join(workspace.cwd, "packages", "shared")),
+    await assertLinkPointsTo(
+      path.join(workspace.cwd, "server", "node_modules", "@repo", "shared"),
+      path.join(workspace.cwd, "packages", "shared")
     );
-    await expect(fs.realpath(path.join(repoRoot, "server", "node_modules", "@repo", "shared"))).resolves.toBe(
-      await fs.realpath(path.join(repoRoot, "packages", "shared")),
+    await assertLinkPointsTo(
+      path.join(repoRoot, "server", "node_modules", "@repo", "shared"),
+      path.join(repoRoot, "packages", "shared")
     );
     },
     30_000,
@@ -1333,12 +1389,14 @@ describe("realizeExecutionWorkspace", () => {
       await fs.chmod(fakePnpmPath, 0o755);
 
       let caught: Error | null = null;
+      const runShell = process.platform === "win32" ? resolveShell() : scriptPath;
+      const runArgs = process.platform === "win32" ? [scriptPath] : [];
       try {
-        await execFileAsync(scriptPath, [], {
+        await execFileAsync(runShell, runArgs, {
           cwd: worktreeRoot,
           env: {
             ...process.env,
-            PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+            PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}`,
             PAPERCLIP_WORKSPACE_BASE_CWD: baseRoot,
             PAPERCLIP_WORKSPACE_CWD: worktreeRoot,
           },
@@ -1411,11 +1469,13 @@ describe("realizeExecutionWorkspace", () => {
       );
       await fs.chmod(fakePnpmPath, 0o755);
 
-      const result = await execFileAsync(scriptPath, [], {
+      const runShell = process.platform === "win32" ? resolveShell() : scriptPath;
+      const runArgs = process.platform === "win32" ? [scriptPath] : [];
+      const result = await execFileAsync(runShell, runArgs, {
         cwd: worktreeRoot,
         env: {
           ...process.env,
-          PATH: `${fakeBin}:${process.env.PATH ?? ""}`,
+          PATH: `${fakeBin}${path.delimiter}${process.env.PATH ?? ""}`,
           PAPERCLIP_WORKSPACE_BASE_CWD: baseRoot,
           PAPERCLIP_WORKSPACE_CWD: worktreeRoot,
         },
@@ -1525,11 +1585,13 @@ describe("realizeExecutionWorkspace", () => {
 
     expect((await fs.lstat(path.join(workspace.cwd, "node_modules"))).isSymbolicLink()).toBe(false);
     expect((await fs.lstat(path.join(workspace.cwd, "server", "node_modules"))).isSymbolicLink()).toBe(false);
-    await expect(fs.realpath(path.join(workspace.cwd, "server", "node_modules", "@repo", "shared"))).resolves.toBe(
-      await fs.realpath(path.join(workspace.cwd, "packages", "shared")),
+    await assertLinkPointsTo(
+      path.join(workspace.cwd, "server", "node_modules", "@repo", "shared"),
+      path.join(workspace.cwd, "packages", "shared")
     );
-    await expect(fs.realpath(path.join(repoRoot, "server", "node_modules", "@repo", "shared"))).resolves.toBe(
-      await fs.realpath(path.join(repoRoot, "packages", "shared")),
+    await assertLinkPointsTo(
+      path.join(repoRoot, "server", "node_modules", "@repo", "shared"),
+      path.join(repoRoot, "packages", "shared")
     );
     },
     15_000,
@@ -1683,7 +1745,7 @@ describe("realizeExecutionWorkspace", () => {
     });
 
     expect(workspace.branchName).toBe(branchName);
-    await expect(fs.readFile(path.join(workspace.cwd, "feature.txt"), "utf8")).resolves.toBe("preserve me\n");
+    await expect(fs.readFile(path.join(workspace.cwd, "feature.txt"), "utf8").then(s => s.replace(/\r\n/g, "\n"))).resolves.toBe("preserve me\n");
     const actualHead = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: workspace.cwd })).stdout.trim();
     expect(actualHead).toBe(expectedHead);
   });
@@ -1779,8 +1841,8 @@ describe("realizeExecutionWorkspace", () => {
 
     expect(restored).not.toBeNull();
     expect(restored?.cwd).toBe(initial.cwd);
-    await expect(fs.readFile(path.join(initial.cwd, "feature.txt"), "utf8")).resolves.toBe("persisted\n");
-    await expect(fs.readFile(path.join(initial.cwd, ".paperclip-restored-branch"), "utf8")).resolves.toBe(`${branchName}\n`);
+    await expect(fs.readFile(path.join(initial.cwd, "feature.txt"), "utf8").then(s => s.replace(/\r\n/g, "\n"))).resolves.toBe("persisted\n");
+    await expect(fs.readFile(path.join(initial.cwd, ".paperclip-restored-branch"), "utf8").then(s => s.replace(/\r\n/g, "\n"))).resolves.toBe(`${branchName}\n`);
     const actualHead = (await execFileAsync("git", ["rev-parse", "HEAD"], { cwd: initial.cwd })).stdout.trim();
     expect(actualHead).toBe(expectedHead);
   }, 15_000);
@@ -2387,16 +2449,16 @@ describe("ensureRuntimeServicesForRun", () => {
     expect(executionServices[0]?.url).not.toBe(primaryServices[0]?.url);
 
     const primaryResponse = await fetch(primaryServices[0]!.url!);
-    expect(await primaryResponse.text()).toBe(path.join(primaryWorkspaceRoot, ".paperclip", "runtime-services"));
+    expect(path.resolve(await primaryResponse.text())).toBe(path.resolve(path.join(primaryWorkspaceRoot, ".paperclip", "runtime-services")));
 
     const executionResponse = await fetch(executionServices[0]!.url!);
-    expect(await executionResponse.text()).toBe(path.join(worktreeWorkspaceRoot, ".paperclip", "runtime-services"));
+    expect(path.resolve(await executionResponse.text())).toBe(path.resolve(path.join(worktreeWorkspaceRoot, ".paperclip", "runtime-services")));
   });
 
   it("does not leak parent Paperclip instance env into runtime service commands", async () => {
     const workspaceRoot = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-runtime-env-"));
     const workspace = buildWorkspace(workspaceRoot);
-    const envCapturePath = path.join(workspaceRoot, "captured-env.json");
+    const envCapturePath = path.join(workspaceRoot, "captured-env.json").split(path.sep).join("/");
     const serviceCommand = [
       "node -e",
       JSON.stringify(

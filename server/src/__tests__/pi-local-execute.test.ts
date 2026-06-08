@@ -25,6 +25,9 @@ process.exit(0);
 `;
   await fs.writeFile(commandPath, script, "utf8");
   await fs.chmod(commandPath, 0o755);
+  if (process.platform === "win32") {
+    await fs.writeFile(`${commandPath}.cmd`, `@echo off\r\nnode "%~dp0${path.basename(commandPath)}" %*\r\n`, "utf8");
+  }
 }
 
 async function writeEnvDumpPiCommand(commandPath: string, envDumpPath: string): Promise<void> {
@@ -44,6 +47,9 @@ process.exit(0);
 `;
   await fs.writeFile(commandPath, script, "utf8");
   await fs.chmod(commandPath, 0o755);
+  if (process.platform === "win32") {
+    await fs.writeFile(`${commandPath}.cmd`, `@echo off\r\nnode "%~dp0${path.basename(commandPath)}" %*\r\n`, "utf8");
+  }
 }
 
 describe("pi_local execute", () => {

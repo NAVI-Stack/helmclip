@@ -298,6 +298,10 @@ export async function terminateLocalService(
   try {
     if (targetProcessGroup) {
       process.kill(-record.processGroupId!, signal);
+    } else if (process.platform === "win32") {
+      const systemRoot = process.env.SystemRoot || process.env.windir || "C:\\Windows";
+      const taskkillPath = path.join(systemRoot, "System32", "taskkill.exe");
+      execFile(taskkillPath, ["/F", "/T", "/PID", String(record.pid)], () => {});
     } else {
       process.kill(record.pid, signal);
     }
@@ -323,6 +327,10 @@ export async function terminateLocalService(
   try {
     if (targetProcessGroup) {
       process.kill(-record.processGroupId!, "SIGKILL");
+    } else if (process.platform === "win32") {
+      const systemRoot = process.env.SystemRoot || process.env.windir || "C:\\Windows";
+      const taskkillPath = path.join(systemRoot, "System32", "taskkill.exe");
+      execFile(taskkillPath, ["/F", "/T", "/PID", String(record.pid)], () => {});
     } else {
       process.kill(record.pid, "SIGKILL");
     }
