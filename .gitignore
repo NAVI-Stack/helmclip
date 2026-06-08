@@ -43,6 +43,7 @@ diagnostics/
 # Editor / tool temp files
 *.tmp
 .vscode/
+.cursor/hooks/state/continual-learning.json
 .claude/settings.local.json
 .paperclip-local/
 /.idea/
