@@ -4363,7 +4363,9 @@ export function normalizePaperclipRunnerAdapterConfig(
   }
   if (next.provider === "acpx") {
     next.acpxAgent ??= "claude";
-    if (next.acpxAgent !== "pi") next.model = resolvePaperclipRunnerModel("acpx", config.model);
+    if (next.acpxAgent !== "pi" && next.acpxAgent !== "kimi") {
+      next.model = resolvePaperclipRunnerModel("acpx", config.model);
+    }
   }
   return normalizePaperclipOperationalSkillPreference(adapterType, next);
 }

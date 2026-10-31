@@ -122,7 +122,7 @@ async function runPnpm(cwd: string, args: string[]) {
 
 async function createTempRepo(defaultBranch = "main") {
   const repoRoot = await fs.mkdtemp(path.join(os.tmpdir(), "paperclip-worktree-repo-"));
-  await runGit(repoRoot, ["init"]);
+  await runGit(repoRoot, ["init", "--initial-branch", defaultBranch]);
   await runGit(repoRoot, ["config", "user.email", "paperclip@example.com"]);
   await runGit(repoRoot, ["config", "user.name", "Paperclip Test"]);
   await fs.writeFile(path.join(repoRoot, "README.md"), "hello\n", "utf8");
