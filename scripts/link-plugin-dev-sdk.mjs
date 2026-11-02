@@ -93,6 +93,17 @@ export function linkSdkInto(packageDir) {
     if (error?.code !== "ENOENT") throw error;
   }
 
-  symlinkSync(relativeSdkDir, linkTarget, "dir");
+  try {
+    symlinkSync(relativeSdkDir, linkTarget, "dir");
+  } catch (error) {
+    // Windows without Developer Mode / SeCreateSymbolicLinkPrivilege cannot
+    // create dir symlinks. Junctions work without that privilege but need an
+    // absolute target path.
+    const code = error?.code;
+    if (process.platform !== "win32" || (code !== "EPERM" && code !== "EACCES" && code !== "ENOTSUP")) {
+      throw error;
+    }
+    symlinkSync(sdkDir, linkTarget, "junction");
+  }
   return true;
 }
